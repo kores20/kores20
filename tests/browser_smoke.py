@@ -60,20 +60,23 @@ with tempfile.TemporaryDirectory() as tmp:
             edited=next(o for o in saved if o['id']=='264900001')
             assert edited['works']==['panel'] and 'site' in edited['skipped'] and 'feeder' in edited['skipped']
             page.click('[data-close="wizard"]')
-            # Existing orders derive LV answers from their current work selection.
+            # LV remains automatic, without work-selection or checklist fields.
             page.locator('[data-open]').click();page.wait_for_selector('#editor[open]')
-            page.click('[data-tab="checks"]');page.select_option('#check-code','LV')
-            page.wait_for_selector('[data-lv-row="14"]')
-            yes_rows=lambda: page.locator('[data-lv-row]:has([data-lv-value="نعم"])').evaluate_all("els=>els.map(e=>Number(e.dataset.lvRow))")
-            assert yes_rows()==[5,6,7,8,9,10]
-            assert page.locator('[data-check-index]').count()==0
+            page.click('[data-tab="checks"]');page.wait_for_selector('#check-code')
+            assert page.locator('#check-code option[value="LV"]').count()==0
+            automatic=page.request.post('http://127.0.0.1:8097/api/missing',data={'order':edited}).json()
+            assert [i+1 for i,v in enumerate(automatic['lvChecks']) if v=='نعم']==[5,6,7,8,9,10]
+            assert not any(q['key'].startswith('assessments.LV.') for q in automatic['questions'])
+            page.click('[data-tab="forms"]');page.wait_for_selector('[data-preview="LV"]')
             page.click('[data-tab="data"]')
             assert page.locator('[data-work="lv"]').count()==0
             page.check('[data-work="meter"]')
             page.wait_for_function("document.querySelector('#save-state').textContent.includes('البيانات محفوظة')")
-            page.click('[data-tab="checks"]');page.select_option('#check-code','LV')
-            page.wait_for_selector('[data-lv-row="14"]')
-            assert yes_rows()==list(range(5,15))
+            page.click('[data-tab="checks"]');page.wait_for_selector('#check-code')
+            assert page.locator('#check-code option[value="LV"]').count()==0
+            updated=next(o for o in page.request.get('http://127.0.0.1:8097/api/state').json()['orders'] if o['id']=='264900001')
+            automatic=page.request.post('http://127.0.0.1:8097/api/missing',data={'order':updated}).json()
+            assert [i+1 for i,v in enumerate(automatic['lvChecks']) if v=='نعم']==list(range(5,15))
             page.click('[data-close="editor"]')
             page.locator('#search').fill('');page.screenshot(path=tmp+'/desktop.png',full_page=True)
             page.set_viewport_size({'width':390,'height':844});page.screenshot(path=tmp+'/mobile.png',full_page=True)
