@@ -19,21 +19,77 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .schema import DEFAULTS, FORMS, WORKS, QUESTIONS, PATTERNS, new_order, missing, selected_forms
-from .pdf_engine import generate, ASSETS
+from .pdf_engine import generate, ASSETS, TEMPLATES, template_path
+from .storage import open_db
 
 ROOT=Path(__file__).parent
 DATA=Path(os.getenv('DATA_DIR',str(ROOT.parent/'.data')));DATA.mkdir(parents=True,exist_ok=True)
 STATIC=ROOT/'static';JOBS={};JOBS_LOCK=threading.Lock();PDF_LOCK=threading.Lock()
+TEMPLATE_CODES=set(FORMS)|{'04','06','11','12','17','23','28','OH-13','OH-14'}
+TEMPLATE_CODES={c for c in TEMPLATE_CODES if not c.startswith('06-')}
+
+def migration_archive():
+    orders,settings=state();buf=io.BytesIO()
+    with zipfile.ZipFile(buf,'w',zipfile.ZIP_DEFLATED) as z:
+        z.writestr('orders-backup.json',json.dumps({'orders':orders,'settings':settings},ensure_ascii=False))
+        for code in sorted(TEMPLATE_CODES):
+            p=TEMPLATES/(code+'.pdf')
+            if p.is_file():z.write(p,'templates/'+p.name)
+            else:
+                with db() as c:row=c.execute('SELECT pdf FROM templates WHERE code=?',(code,)).fetchone()
+                if row:z.writestr('templates/'+p.name,bytes(row[0]))
+    return buf.getvalue()
+
+def restore_migration(body):
+    raw=base64.b64decode(body.get('base64',''),validate=True)
+    if len(raw)>20_000_000:raise ValueError('حجم حزمة النقل أكبر من 20 ميغابايت')
+    import fitz
+    payloads={};backup=None
+    with zipfile.ZipFile(io.BytesIO(raw)) as z:
+        if len(z.infolist())>300:raise ValueError('عدد ملفات الحزمة أكبر من المسموح')
+        total=0
+        for info in z.infolist():
+            name=Path(info.filename).name
+            if info.is_dir():continue
+            if name=='orders-backup.json':
+                if info.file_size>4_000_000:raise ValueError('نسخة البيانات أكبر من المسموح')
+                backup=json.loads(z.read(info));continue
+            code=name.removesuffix('.pdf')
+            if code not in TEMPLATE_CODES or not name.endswith('.pdf'):continue
+            total+=info.file_size
+            if total>40_000_000 or info.file_size>4_000_000:raise ValueError('حجم النماذج أكبر من المسموح')
+            pdf=z.read(info)
+            with fitz.open(stream=pdf,filetype='pdf') as doc:
+                if len(doc)!=1:raise ValueError('كل نموذج يجب أن يكون صفحة واحدة: '+name)
+                rect=doc[0].rect
+                expected=(792,612) if code in ['25','04'] else (842,595) if code=='LV' else (612,792)
+                if doc[0].rotation or abs(rect.width-expected[0])>2 or abs(rect.height-expected[1])>2:
+                    raise ValueError('مقاس أو اتجاه النموذج غير مطابق للنسخة المعتمدة: '+name)
+            payloads[code]=pdf
+    if not payloads:raise ValueError('لم نجد النماذج داخل الحزمة. استخدم زر نقل الموقع من نسختك المحلية.')
+    existing,_=state()
+    if backup and existing:raise ValueError('الموقع يحتوي أوامر بالفعل؛ لن نستبدلها بحزمة نقل قديمة. استخدم استيراد نسخة البيانات عند الحاجة.')
+    if backup:
+        for o in backup.get('orders',[]):validate(o)
+    with PDF_LOCK:
+        # The database, not the web server's temporary filesystem, owns cloud data.
+        with db() as c:
+            for code,pdf in payloads.items():c.execute('INSERT INTO templates(code,pdf) VALUES(?,?) ON CONFLICT(code) DO UPDATE SET pdf=excluded.pdf',(code,pdf))
+        TEMPLATES.mkdir(parents=True,exist_ok=True)
+        for code,pdf in payloads.items():
+            dest=TEMPLATES/(code+'.pdf');temporary=dest.with_suffix('.pending');temporary.write_bytes(pdf);temporary.replace(dest)
+        if backup:
+            put_orders(backup.get('orders',[]))
+            if isinstance(backup.get('settings'),dict):
+                with db() as c:c.execute('INSERT INTO settings(id,data) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',(json.dumps(backup['settings'],ensure_ascii=False),))
+    return {'templates':len(payloads),'orders':len(backup.get('orders',[])) if backup else 0}
 
 def db():
-    conn=sqlite3.connect(DATA/'orders.sqlite3',timeout=20)
-    conn.execute('CREATE TABLE IF NOT EXISTS orders (uid TEXT PRIMARY KEY, data TEXT NOT NULL)')
-    conn.execute('CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY, data TEXT NOT NULL)')
-    return conn
+    return open_db(DATA)
 
 def state():
     with db() as c:
-        rows=[json.loads(r[0]) for r in c.execute('SELECT data FROM orders ORDER BY rowid DESC')]
+        rows=[json.loads(r[0]) for r in c.execute('SELECT data FROM orders ORDER BY updated_at DESC, uid DESC')]
         settings=c.execute('SELECT data FROM settings WHERE id=1').fetchone()
     return rows,json.loads(settings[0]) if settings else DEFAULTS
 
@@ -53,7 +109,7 @@ def put_orders(orders):
     if len(orders)>500:raise ValueError('الحد 500 أمر في العملية الواحدة')
     for o in orders:validate(o)
     with db() as c:
-        for o in orders:c.execute('INSERT OR REPLACE INTO orders VALUES (?,?)',(o['uid'],json.dumps(o,ensure_ascii=False)))
+        for o in orders:c.execute('INSERT INTO orders(uid,data,updated_at) VALUES (?,?,?) ON CONFLICT(uid) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at',(o['uid'],json.dumps(o,ensure_ascii=False),datetime.now().isoformat()))
 
 def import_table(body):
     _,settings=state();year=int(body.get('year',date.today().year))
@@ -159,10 +215,16 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200,{'forms':FORMS,'works':WORKS,'questions':QUESTIONS,'defaults':DEFAULTS,'patterns':PATTERNS});return
             if path=='/api/new':
                 _,settings=state();o=new_order(settings);o['uid']=uuid.uuid4().hex;self.reply(200,o);return
+            if path=='/api/template-status':
+                with db() as c:stored={r[0] for r in c.execute('SELECT code FROM templates')}
+                available={c for c in TEMPLATE_CODES if (TEMPLATES/(c+'.pdf')).is_file()}|stored
+                self.reply(200,{'available':sorted(available),'missing':[c for c in ['01','inspection','22','03','02','26','24','25','16'] if c not in available]});return
+            if path=='/api/migration':
+                self.reply(200,migration_archive(),'application/zip',{'Content-Disposition':'attachment; filename="namothaj-transfer-private.zip"'});return
             if path=='/api/template':
                 code=parse_qs(url.query).get('code',[''])[0];code='06' if code.startswith('06-') else code
                 if code not in set(FORMS)|{'06'}:raise ValueError('نموذج غير معروف')
-                self.reply(200,(ASSETS/'templates'/(code+'.pdf')).read_bytes(),'application/pdf');return
+                self.reply(200,template_path(code).read_bytes(),'application/pdf');return
             if path.startswith('/api/jobs/'):
                 key=path.rsplit('/',1)[1]
                 with JOBS_LOCK:j=JOBS.get(key,{}).copy()
@@ -186,12 +248,13 @@ class Handler(BaseHTTPRequestHandler):
         if origin and urlparse(origin).netloc!=self.headers.get('Host'):self.reply(403,{'error':'مصدر الطلب غير مسموح'});return
         try:
             length=int(self.headers.get('Content-Length',0))
-            if length>12_000_000:self.reply(413,{'error':'الحد الأقصى للطلب 12 ميغابايت'});return
+            if length>30_000_000:self.reply(413,{'error':'الحد الأقصى للطلب 30 ميغابايت'});return
             body=json.loads(self.rfile.read(length) or '{}');path=urlparse(self.path).path
+            if path=='/api/migration':self.reply(200,restore_migration(body));return
             if path=='/api/save':
                 put_orders(body.get('orders',[]))
                 if 'settings' in body:
-                    with db() as c:c.execute('INSERT OR REPLACE INTO settings VALUES(1,?)',(json.dumps(body['settings'],ensure_ascii=False),))
+                    with db() as c:c.execute('INSERT INTO settings(id,data) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',(json.dumps(body['settings'],ensure_ascii=False),))
                 self.reply(200,{'saved':True});return
             if path=='/api/delete':
                 with db() as c:c.execute('DELETE FROM orders WHERE uid=?',(body['uid'],))
@@ -212,6 +275,8 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     host=os.getenv('HOST','127.0.0.1');port=int(os.getenv('PORT','8080'))
+    if os.getenv('RENDER') and not os.getenv('APP_PASSWORD'):raise RuntimeError('Set APP_PASSWORD before publishing this website.')
+    if os.getenv('RENDER') and not os.getenv('DATABASE_URL'):raise RuntimeError('Set DATABASE_URL for durable data before publishing on Render Free.')
     print(f'Forms app: http://{host}:{port}',flush=True)
     ThreadingHTTPServer((host,port),Handler).serve_forever()
 

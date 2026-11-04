@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path, PurePosixPath
 
 REPOSITORY='kores20/kores20'
-ROOT_FILES={'requirements.txt','README.md','LOCAL-START.txt','run_local.py','run-windows.bat','run-mac.command','update_local.py','update-windows.bat','Dockerfile','compose.yaml','.gitignore','.dockerignore'}
+ROOT_FILES={'requirements.txt','README.md','LOCAL-START.txt','run_local.py','run-windows.bat','run-mac.command','update_local.py','update-windows.bat','Dockerfile','compose.yaml','render.yaml','.gitignore','.dockerignore'}
 
 def apply_archive(raw, root):
     root=Path(root).resolve();stamp=datetime.now().strftime('%Y%m%d-%H%M%S-%f');backup=root/'.updates'/stamp

@@ -2,6 +2,7 @@
 import html
 import io
 import json
+import os
 import re
 from datetime import date
 from functools import lru_cache
@@ -11,10 +12,21 @@ import fitz
 from PIL import Image, ImageChops
 
 from .schema import selected_forms
+from .storage import read_template
 
 ASSETS=Path(__file__).parent/'assets'
+TEMPLATES=Path(os.getenv('TEMPLATE_DIR',str(ASSETS/'templates')))
 LAYOUT=json.loads((ASSETS/'reviewed-layouts.json').read_text())
 BLUE=(.09,.21,.36)
+
+def template_path(code):
+    path=TEMPLATES/(code+'.pdf')
+    if path.is_file():return path
+    raw=read_template(code)
+    if raw:
+        TEMPLATES.mkdir(parents=True,exist_ok=True)
+        temporary=path.with_suffix('.cache');temporary.write_bytes(raw);temporary.replace(path)
+    return path
 KEYS={
  '01':['division','region','contractor','feeder','location','dateText','id','shortDate','timeText','handoverNotes','consultantShort','representative','inspector'],
  'inspection':['department','inspector','id','time','dateText','description','contractorLabel','note1','inspector'],
@@ -191,7 +203,7 @@ def generate(o, only_form=None):
     v=data_values(o);result=fitz.open();codes=[only_form] if only_form else selected_forms(o)
     for code in codes:
         base='06' if code.startswith('06-') else code
-        path=ASSETS/'templates'/(base+'.pdf')
+        path=template_path(base)
         if not path.exists():raise ValueError('النموذج غير متوفر: '+code)
         groups=[o.get('meters',[])[i:i+10] for i in range(0,max(1,len(o.get('meters',[]))),10)] if code=='25' else [None]
         for group in groups:

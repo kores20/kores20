@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: namothaj
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.server
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.10
+      - key: HOST
+        value: 0.0.0.0
+      - key: DATA_DIR
+        value: /tmp/namothaj
+      - key: TEMPLATE_DIR
+        value: /tmp/namothaj/templates
+      - key: DATABASE_URL
+        sync: false
+      - key: APP_PASSWORD
+        generateValue: true
