@@ -11,7 +11,7 @@ from pathlib import Path
 import fitz
 from PIL import Image, ImageChops
 
-from .schema import selected_forms
+from .schema import selected_forms, lv_checks
 from .storage import read_template
 
 ASSETS=Path(__file__).parent/'assets'
@@ -195,9 +195,10 @@ def extras(p,code,o,v):
         put(p,o.get('terminationNotes',''),[83,560,555,578])
     elif code=='LV':
         put(p,o.get('contractor',''),[140,103.5,475,116.7]);put(p,o.get('id',''),[159,119.1,477,131.5]);put(p,v['dateText'],[92,435.3,225,447.5])
+        put(p,o.get('representative',''),[108,405.6,225,418.6],float(o.get('fontScale',1)))
+        checks=lv_checks(o)
         for i,y in enumerate([170.5,185.5,200.6,215.6,230.6,245.7,260.7,275.8,290.8,305.9,320.9,336,351,366]):
-            val=assessment(o,'LV',i)
-            if val in ['نعم','لا']:tick(p,610.6 if val=='نعم' else 710,y)
+            if checks[i]=='نعم':tick(p,610.6,y)
 
 def generate(o, only_form=None):
     v=data_values(o);result=fitz.open();codes=[only_form] if only_form else selected_forms(o)

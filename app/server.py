@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from .schema import DEFAULTS, FORMS, WORKS, QUESTIONS, PATTERNS, new_order, missing, selected_forms
+from .schema import DEFAULTS, FORMS, WORKS, QUESTIONS, LV_QUESTIONS, PATTERNS, new_order, missing, selected_forms, lv_checks
 from .pdf_engine import generate, ASSETS, TEMPLATES, template_path
 from .storage import open_db
 
@@ -212,13 +212,13 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/state':
                 orders,settings=state();self.reply(200,{'orders':orders,'settings':settings});return
             if path=='/api/schema':
-                self.reply(200,{'forms':FORMS,'works':WORKS,'questions':QUESTIONS,'defaults':DEFAULTS,'patterns':PATTERNS});return
+                self.reply(200,{'forms':FORMS,'works':WORKS,'questions':QUESTIONS,'lvQuestions':LV_QUESTIONS,'defaults':DEFAULTS,'patterns':PATTERNS});return
             if path=='/api/new':
                 _,settings=state();o=new_order(settings);o['uid']=uuid.uuid4().hex;self.reply(200,o);return
             if path=='/api/template-status':
                 with db() as c:stored={r[0] for r in c.execute('SELECT code FROM templates')}
                 available={c for c in TEMPLATE_CODES if (TEMPLATES/(c+'.pdf')).is_file()}|stored
-                self.reply(200,{'available':sorted(available),'missing':[c for c in ['01','inspection','22','03','02','26','24','25','16'] if c not in available]});return
+                self.reply(200,{'available':sorted(available),'missing':[c for c in ['01','inspection','22','03','02','26','24','25','16','LV'] if c not in available]});return
             if path=='/api/migration':
                 self.reply(200,migration_archive(),'application/zip',{'Content-Disposition':'attachment; filename="namothaj-transfer-private.zip"'});return
             if path=='/api/template':
@@ -261,7 +261,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200,{'deleted':True});return
             if path=='/api/import':
                 orders=import_table(body);put_orders(orders);self.reply(200,{'orders':orders});return
-            if path=='/api/missing':self.reply(200,{'questions':missing(body['order']),'forms':selected_forms(body['order'])});return
+            if path=='/api/missing':self.reply(200,{'questions':missing(body['order']),'forms':selected_forms(body['order']),'lvChecks':lv_checks(body['order'])});return
             if path=='/api/export':self.reply(202,{'job':start_export(body['orders'],body.get('format','zip'))});return
             if path=='/api/preview':
                 o=body['order'];validate(o);form=body.get('form')

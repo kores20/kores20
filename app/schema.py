@@ -35,7 +35,31 @@ FORMS = {'01':'تسليم الموقع','inspection':'تفتيش الموقع','
  '09':'المحول والوحدة الحلقية','06-transformer':'قاعدة المحول','06-rmu':'قاعدة الوحدة الحلقية',
  '08':'التأريض','07':'لوحة التوزيع','LV':'فحص الجهد المنخفض'}
 WORKS = {'meter':'تركيب عداد','excavation':'حفر وتمديد','joint':'وصلة لحام',
- 'termination':'نهاية طرفية','transformer':'محول','rmu':'وحدة حلقية','panel':'لوحة توزيع','earthing':'تأريض','lv':'فحص LV'}
+ 'termination':'نهاية طرفية','transformer':'محول','rmu':'وحدة حلقية','panel':'لوحة توزيع (بيلر)','earthing':'تأريض','lv':'فحص LV'}
+LV_QUESTIONS = [
+    'لوحة الجهد المنخفض مثبتة ومتوازنة',
+    'نهايات كابلات لوحة الجهد المنخفض موصلة بصورة صحيحة',
+    'تأريض محايد لوحة الجهد المنخفض مطابق للمعيار',
+    'قاعدة لوحة الجهد المنخفض سليمة',
+    'جميع توصيلات كابلات الجهد المنخفض محكمة وصحيحة',
+    'توصيل تأريض كابلات الجهد المنخفض صحيح',
+    'البيلر مثبت ومتوازن',
+    'نهايات كابلات البيلر موصلة بصورة صحيحة',
+    'تأريض محايد البيلر مطابق للمعيار',
+    'قاعدة البيلر سليمة',
+    'صندوق العداد مثبت بإحكام وعلى الارتفاع الصحيح',
+    'قضيب التأريض مركب وموصل بصندوق العداد حسب المعيار',
+    'أسلاك تأريض المشترك موصلة بالمحايد',
+    'توصيلات الكابلات والأسلاك داخل صندوق العداد محكمة',
+]
+
+def lv_checks(o):
+    """Fixed LV ticks are derived at use time, including for existing orders."""
+    works=set(o.get('works',[]));checked={5,6}
+    if 'meter' in works:checked.update([11,12,13,14])
+    if 'panel' in works:checked.update([7,8,9,10])
+    return ['نعم' if n in checked else '' for n in range(1,15)]
+
 BASE = ['01','inspection','22','03','02','26']
 PATTERNS = {
  'inspection':['لا' if n==1 else 'لا ينطبق' if n in [8,9,10,12,26] else 'نعم' for n in range(1,27)],
@@ -72,8 +96,7 @@ def selected_forms(o):
     if 'rmu' in w:forms+=['06-rmu']
     if 'earthing' in w:forms+=['08']
     if 'panel' in w:forms+=['07']
-    if 'lv' in w:forms+=['LV']
-    return forms
+    return forms+['LV']
 
 def missing(o):
     skipped=set(o.get('skipped',[]));qs=[]
@@ -106,7 +129,7 @@ def missing(o):
         if flag in works:add(key,label,'text','الأعمال')
     # Checklist applicability is explicit; skipped answers remain empty in PDF.
     for code in selected_forms(o):
-        if code in ['25','01','02','03','22']:continue
+        if code in ['25','01','02','03','22','LV']:continue
         count={'inspection':26,'26':13,'24':9,'16':9,'05':25,'08':7,'07':13,'09':31,'LV':14,'06-transformer':6,'06-rmu':6}.get(code,0)
         if code=='10':
             for tag,n in [('10-joint',14),('10-termination',13)]:

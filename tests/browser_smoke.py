@@ -60,12 +60,27 @@ with tempfile.TemporaryDirectory() as tmp:
             edited=next(o for o in saved if o['id']=='264900001')
             assert edited['works']==['panel'] and 'site' in edited['skipped'] and 'feeder' in edited['skipped']
             page.click('[data-close="wizard"]')
+            # Existing orders derive LV answers from their current work selection.
+            page.locator('[data-open]').click();page.wait_for_selector('#editor[open]')
+            page.click('[data-tab="checks"]');page.select_option('#check-code','LV')
+            page.wait_for_selector('[data-lv-row="14"]')
+            yes_rows=lambda: page.locator('[data-lv-row]:has([data-lv-value="نعم"])').evaluate_all("els=>els.map(e=>Number(e.dataset.lvRow))")
+            assert yes_rows()==[5,6,7,8,9,10]
+            assert page.locator('[data-check-index]').count()==0
+            page.click('[data-tab="data"]')
+            assert page.locator('[data-work="lv"]').count()==0
+            page.check('[data-work="meter"]')
+            page.wait_for_function("document.querySelector('#save-state').textContent.includes('البيانات محفوظة')")
+            page.click('[data-tab="checks"]');page.select_option('#check-code','LV')
+            page.wait_for_selector('[data-lv-row="14"]')
+            assert yes_rows()==list(range(5,15))
+            page.click('[data-close="editor"]')
             page.locator('#search').fill('');page.screenshot(path=tmp+'/desktop.png',full_page=True)
             page.set_viewport_size({'width':390,'height':844});page.screenshot(path=tmp+'/mobile.png',full_page=True)
             assert not errors,errors
             # Horizontal table scrolling is intentional; the page itself must fit.
             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')
             assert '000609' in page.request.get('http://127.0.0.1:8097/api/state').text()
-            print('PASS: create/edit/save/reload, checklist, import30, realPDFdownload, mobile, noJSerrors')
+            print('PASS: create/edit/save/reload, checklist, import30, realPDFdownload, automatic LV rules, mobile, noJSerrors')
             browser.close()
     finally:server.terminate();server.wait(timeout=5)

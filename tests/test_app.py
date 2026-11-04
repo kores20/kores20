@@ -7,13 +7,14 @@ import unittest
 import uuid
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 import fitz
 from openpyxl import Workbook
 
 from app import server
-from app.pdf_engine import generate, meter_values
-from app.schema import new_order, missing, selected_forms
+from app.pdf_engine import generate, meter_values, extras, data_values
+from app.schema import new_order, missing, selected_forms, lv_checks
 
 
 def complete_order():
@@ -26,12 +27,28 @@ def complete_order():
 
 class SchemaTests(unittest.TestCase):
     def test_bundle_and_inspection_scope(self):
-        o=complete_order();self.assertEqual(len(selected_forms(o)),9);self.assertEqual(missing(o),[])
+        o=complete_order();self.assertEqual(len(selected_forms(o)),10);self.assertEqual(missing(o),[])
         o['works']=['excavation','termination','transformer','rmu','earthing']
-        self.assertEqual(len(selected_forms(o)),12)
+        self.assertEqual(len(selected_forms(o)),13)
         self.assertNotIn('25',selected_forms(o))
         o['mode']='inspection';self.assertEqual(selected_forms(o),['inspection'])
         self.assertFalse(any(q['section']=='العدادات' for q in missing(o)))
+
+    def test_lv_rules_follow_work_changes_on_existing_orders(self):
+        o=complete_order()
+        # Old manual patterns and skipped questions must not change the fixed LV ticks.
+        o['assessments']['LV']=['نعم']*14
+        o['skipped']=['assessments.LV.4']
+        cases=[([], {5,6}), (['meter'], {5,6,11,12,13,14}),
+               (['panel'], {5,6,7,8,9,10}),
+               (['meter','panel','lv'], set(range(5,15)))]
+        for works,expected in cases:
+            with self.subTest(works=works):
+                o['works']=works
+                self.assertEqual({i+1 for i,v in enumerate(lv_checks(o)) if v=='نعم'}, expected)
+                self.assertEqual(selected_forms(o).count('LV'),1)
+                self.assertEqual(selected_forms(o)[-1],'LV')
+                self.assertFalse(any(q['key'].startswith('assessments.LV.') for q in missing(o)))
 
     def test_missing_and_intentionally_blank(self):
         o=complete_order();o['permit']='';self.assertIn('permit',[q['key'] for q in missing(o)])
@@ -89,10 +106,21 @@ class PDFTests(unittest.TestCase):
     def test_original_templates_and_meter_overflow(self):
         o=complete_order();raw=generate(o)
         with fitz.open(stream=raw,filetype='pdf') as doc:
-            self.assertEqual(len(doc),9);self.assertGreater(doc[7].rect.width,doc[7].rect.height)
+            self.assertEqual(len(doc),10);self.assertGreater(doc[7].rect.width,doc[7].rect.height)
+            self.assertGreater(doc[-1].rect.width,doc[-1].rect.height)
             self.assertTrue(all(len(p.get_images())>=1 for p in doc))
         o['meters']=[dict(o['meters'][0],serial=f'ECC25208421{i:05}') for i in range(11)]
-        with fitz.open(stream=generate(o),filetype='pdf') as doc:self.assertEqual(len(doc),10)
+        with fitz.open(stream=generate(o),filetype='pdf') as doc:self.assertEqual(len(doc),11)
+
+    def test_lv_footer_and_actual_checked_rows(self):
+        o=complete_order();o['representative']='ميرزا'
+        with patch('app.pdf_engine.put') as put, patch('app.pdf_engine.tick') as tick:
+            extras(None,'LV',o,data_values(o))
+        name_calls=[call for call in put.call_args_list if call.args[1]=='ميرزا']
+        self.assertEqual(len(name_calls),1)
+        self.assertEqual(name_calls[0].args[2],[108,405.6,225,418.6])
+        self.assertEqual([call.args[1:] for call in tick.call_args_list],
+                         [(610.6,y) for y in [230.6,245.7,320.9,336,351,366]])
 
     def test_batch_job_zip_and_progress(self):
         a=complete_order();a['mode']='inspection';b=complete_order();b['id']='264000002';b['mode']='inspection'
