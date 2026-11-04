@@ -13,7 +13,7 @@ import fitz
 from openpyxl import Workbook
 
 from app import server
-from app.pdf_engine import generate, meter_values, extras, data_values
+from app.pdf_engine import generate, meter_values, extras, draw_checks, data_values, fill_meter, KEYS
 from app.schema import new_order, missing, selected_forms, lv_checks
 
 
@@ -54,6 +54,13 @@ class SchemaTests(unittest.TestCase):
         o=complete_order();o['permit']='';self.assertIn('permit',[q['key'] for q in missing(o)])
         o['skipped']=['permit'];self.assertNotIn('permit',[q['key'] for q in missing(o)])
         o['assessments']['inspection'][2]='';self.assertIn('assessments.inspection.2',[q['key'] for q in missing(o)])
+
+    def test_procedure_dates_are_no_longer_required(self):
+        o=complete_order();o.pop('date190');o.pop('date200')
+        self.assertEqual(missing(o),[])
+        self.assertNotIn('date190',new_order());self.assertNotIn('date200',new_order())
+        o['date']=''
+        self.assertIn('date',[q['key'] for q in missing(o)])
 
     def test_ct_rows_not_reported_for_ordinary_meter(self):
         o=complete_order();o['assessments']['24'][3]='';o['assessments']['16'][8]='';o['assessments']['16'][5]=''
@@ -116,11 +123,22 @@ class PDFTests(unittest.TestCase):
         o=complete_order();o['representative']='ميرزا'
         with patch('app.pdf_engine.put') as put, patch('app.pdf_engine.tick') as tick:
             extras(None,'LV',o,data_values(o))
+            draw_checks(None,None,'LV',o)
         name_calls=[call for call in put.call_args_list if call.args[1]=='ميرزا']
         self.assertEqual(len(name_calls),1)
         self.assertEqual(name_calls[0].args[2],[108,405.6,225,418.6])
-        self.assertEqual([call.args[1:] for call in tick.call_args_list],
+        self.assertEqual([call.args[1:3] for call in tick.call_args_list],
                          [(610.6,y) for y in [230.6,245.7,320.9,336,351,366]])
+
+    def test_saved_legacy_procedure_dates_do_not_print(self):
+        o=complete_order();values=data_values(o)
+        self.assertNotIn('date190Text',values)
+        self.assertNotIn('date200Text',values)
+        self.assertNotIn('date190Text',KEYS['24'])
+        with patch('app.pdf_engine.put') as put:
+            fill_meter(None,o,[],values)
+        boxes=[call.args[2] for call in put.call_args_list]
+        self.assertNotIn([165,544,320,560],boxes)
 
     def test_batch_job_zip_and_progress(self):
         a=complete_order();a['mode']='inspection';b=complete_order();b['id']='264000002';b['mode']='inspection'

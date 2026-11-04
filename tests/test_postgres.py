@@ -53,6 +53,7 @@ class PostgreSQLTests(unittest.TestCase):
                     server.put_orders([order])
                     self.assertEqual(server.state()[0][0]['permit'], '1216')
                     self.assertEqual(server.state()[1]['city'], 'أبها')
+                    server.save_form_config('01', {'visibility': {'mode': 'never'}})
                     (templates / '01.pdf').unlink()
                     # Simulate a new Render process with an empty filesystem cache.
                     code = """
@@ -60,11 +61,12 @@ import hashlib, json
 from app import server, pdf_engine
 orders, settings = server.state()
 p = pdf_engine.template_path('01')
-print(json.dumps({'permit': orders[0]['permit'], 'city': settings['city'], 'sha': hashlib.sha256(p.read_bytes()).hexdigest()}))
+print(json.dumps({'permit': orders[0]['permit'], 'city': settings['city'], 'forms': settings['formConfigs'], 'sha': hashlib.sha256(p.read_bytes()).hexdigest()}))
 """
                     child = subprocess.run([sys.executable, '-c', code], env=dict(os.environ),
                                            capture_output=True, text=True, check=True)
                     self.assertEqual(json.loads(child.stdout), {'permit': '1216', 'city': 'أبها',
+                                                              'forms': {'01': {'visibility': {'mode': 'never'}}},
                                                               'sha': hashlib.sha256(pdf).hexdigest()})
                     with zipfile.ZipFile(io.BytesIO(server.migration_archive())) as z:
                         self.assertEqual(z.read('templates/01.pdf'), pdf)

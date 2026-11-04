@@ -11,6 +11,7 @@ from pathlib import Path
 from playwright.sync_api import sync_playwright
 
 ROOT=Path(__file__).resolve().parents[1]
+ARTIFACTS=Path('/workspace/output/forms-web');ARTIFACTS.mkdir(parents=True,exist_ok=True)
 with tempfile.TemporaryDirectory() as tmp:
     env=dict(os.environ,DATA_DIR=tmp,PORT='8097')
     server=subprocess.Popen([sys.executable,'-m','app.server'],cwd=ROOT,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
@@ -41,6 +42,7 @@ with tempfile.TemporaryDirectory() as tmp:
             csv+='\n'.join(f'{264100000+i},801,أبها,المروج,أفق البنية,2026-10-21,000609' for i in range(30))
             page.fill('#import-text',csv);page.click('#import-submit')
             page.wait_for_function("document.querySelector('#stat-all').textContent==='31'")
+            page.wait_for_function("!document.querySelector('#import-dialog').open")
             page.locator('#search').fill('264046574');page.wait_for_timeout(150)
             page.locator('[data-open]').click();page.wait_for_selector('#editor[open]')
             with page.expect_download(timeout=30000) as download:
@@ -77,9 +79,13 @@ with tempfile.TemporaryDirectory() as tmp:
             updated=next(o for o in page.request.get('http://127.0.0.1:8097/api/state').json()['orders'] if o['id']=='264900001')
             automatic=page.request.post('http://127.0.0.1:8097/api/missing',data={'order':updated}).json()
             assert [i+1 for i,v in enumerate(automatic['lvChecks']) if v=='نعم']==list(range(5,15))
+            page.click('[data-tab="meters"]');page.wait_for_selector('[data-field="mainBreaker"]')
+            assert page.locator('[data-field="date190"], [data-field="date200"]').count()==0
+            assert not any(q['key'] in ['date190','date200'] for q in automatic['questions'])
             page.click('[data-close="editor"]')
-            page.locator('#search').fill('');page.screenshot(path=tmp+'/desktop.png',full_page=True)
-            page.set_viewport_size({'width':390,'height':844});page.screenshot(path=tmp+'/mobile.png',full_page=True)
+            page.locator('#search').fill('');page.evaluate('window.scrollTo(0,0)')
+            page.screenshot(path=str(ARTIFACTS/'website-redesign-desktop.png'))
+            page.set_viewport_size({'width':390,'height':844});page.screenshot(path=str(ARTIFACTS/'website-redesign-mobile.png'))
             assert not errors,errors
             # Horizontal table scrolling is intentional; the page itself must fit.
             assert page.evaluate('document.documentElement.scrollWidth<=innerWidth+1')

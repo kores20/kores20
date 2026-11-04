@@ -7,7 +7,6 @@ import itertools
 import json
 import os
 import re
-import sqlite3
 import threading
 import time
 import traceback
@@ -19,8 +18,10 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .schema import DEFAULTS, FORMS, WORKS, QUESTIONS, LV_QUESTIONS, PATTERNS, new_order, missing, selected_forms, lv_checks
-from .pdf_engine import generate, ASSETS, TEMPLATES, template_path
+from .pdf_engine import generate, TEMPLATES, template_path, describe_form, form_image, example_order
 from .storage import open_db
+from .form_settings import visibility, form_config, check_override, DEFAULT_VISIBILITY, custom_inputs
+from .form_editor import validate_config
 
 ROOT=Path(__file__).parent
 DATA=Path(os.getenv('DATA_DIR',str(ROOT.parent/'.data')));DATA.mkdir(parents=True,exist_ok=True)
@@ -71,6 +72,7 @@ def restore_migration(body):
     if backup and existing:raise ValueError('الموقع يحتوي أوامر بالفعل؛ لن نستبدلها بحزمة نقل قديمة. استخدم استيراد نسخة البيانات عند الحاجة.')
     if backup:
         for o in backup.get('orders',[]):validate(o)
+        if isinstance(backup.get('settings'),dict):validate_settings(backup['settings'])
     with PDF_LOCK:
         # The database, not the web server's temporary filesystem, owns cloud data.
         with db() as c:
@@ -96,14 +98,51 @@ def state():
 def validate(o):
     if not isinstance(o,dict):raise ValueError('بيانات الأمر غير صالحة')
     if o.get('id') and not re.fullmatch(r'\d{9}',str(o['id'])):raise ValueError('رقم أمر العمل يجب أن يتكون من 9 أرقام')
-    for k in ['date','date190','date200']:
+    for k in ['date']:
         if o.get(k):date.fromisoformat(o[k])
     if any(w not in WORKS for w in o.get('works',[])):raise ValueError('نوع العمل غير معروف')
     if len(o.get('meters',[]))>100:raise ValueError('الحد 100 عداد لكل أمر')
     for vals in o.get('assessments',{}).values():
         if not isinstance(vals,list) or any(x not in ['',None,'نعم','لا','لا ينطبق'] for x in vals):raise ValueError('تقييم غير صالح')
+    validate_custom_values(o.get('customFields',{}))
     if not re.fullmatch(r'[a-zA-Z0-9-]{1,80}',o.get('uid','')):raise ValueError('معرّف المسودة غير صالح')
     return o
+
+def validate_custom_values(values):
+    if not isinstance(values,dict) or any(c not in FORMS for c in values):raise ValueError('بيانات الخانات الإضافية غير صالحة')
+    for fields in values.values():
+        if not isinstance(fields,dict) or len(fields)>400:raise ValueError('عدد الخانات الإضافية أكبر من المسموح')
+        for key,value in fields.items():
+            if not re.fullmatch(r'custom-[a-zA-Z0-9-]{1,70}',key) or not isinstance(value,str) or len(value)>500:raise ValueError('قيمة الخانة الإضافية غير صالحة أو أطول من المسموح')
+
+def save_form_config(code,config):
+    if code not in FORMS:raise ValueError('نموذج غير معروف')
+    specs=describe_form(code)['fields'] if config.get('fields') or config.get('checks') else None
+    clean=validate_config(code,config,specs)
+    with db() as c:
+        c.execute('INSERT INTO settings(id,data) VALUES(1,?) ON CONFLICT(id) DO NOTHING',(json.dumps(DEFAULTS,ensure_ascii=False),))
+        row=c.execute('SELECT data FROM settings WHERE id=1'+(' FOR UPDATE' if c.postgres else '')).fetchone()
+        settings=json.loads(row[0])
+        settings.setdefault('formConfigs',{})[code]=clean
+        c.execute('INSERT INTO settings(id,data) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',(json.dumps(settings,ensure_ascii=False),))
+    return settings
+
+def validate_settings(settings):
+    if not isinstance(settings,dict):raise ValueError('الثوابت غير صالحة')
+    configs=settings.get('formConfigs',{})
+    if not isinstance(configs,dict) or any(c not in FORMS for c in configs):raise ValueError('إعدادات النماذج غير صالحة')
+    for code,config in configs.items():validate_config(code,config)
+    return settings
+
+def order_status(o,settings):
+    fixed={}
+    for code in selected_forms(o,settings):
+        config=form_config(settings,code)
+        for key in config.get('checks',{}):
+            value=check_override(config,key,o)
+            if value is not None:fixed[key]=value
+    return {'questions':missing(o,settings),'forms':selected_forms(o,settings),
+            'lvChecks':lv_checks(o,settings),'fixedChecks':fixed,'customInputs':custom_inputs(o,settings)}
 
 def put_orders(orders):
     if len(orders)>500:raise ValueError('الحد 500 أمر في العملية الواحدة')
@@ -165,6 +204,7 @@ def start_export(orders,format_):
     for o in orders:
         validate(o)
         if not o.get('id'):raise ValueError('رقم الأمر مطلوب قبل التصدير')
+    _,settings=state()
     key=uuid.uuid4().hex
     with JOBS_LOCK:
         # Keep recent jobs only; downloads are private to this running instance.
@@ -176,7 +216,7 @@ def start_export(orders,format_):
             blobs=[]
             with PDF_LOCK:
                 for o in orders:
-                    blobs.append((o['id'],generate(o)))
+                    blobs.append((o['id'],generate(o,settings=settings)))
                     with JOBS_LOCK:JOBS[key]['done']+=1
             if len(blobs)==1 and format_=='pdf':raw=blobs[0][1];name=blobs[0][0]+'.pdf';mime='application/pdf'
             else:
@@ -206,6 +246,8 @@ class Handler(BaseHTTPRequestHandler):
         if hmac.compare_digest(given.encode(),password.encode()):return True
         self.reply(401,{'error':'تسجيل الدخول مطلوب'},extra={'WWW-Authenticate':'Basic realm="Forms"'});return False
     def do_GET(self):
+        if urlparse(self.path).path=='/health':
+            self.reply(200,{'status':'ok','version':os.getenv('RENDER_GIT_COMMIT','local')[:12]});return
         if not self.authorized():return
         url=urlparse(self.path);path=unquote(url.path)
         try:
@@ -219,6 +261,15 @@ class Handler(BaseHTTPRequestHandler):
                 with db() as c:stored={r[0] for r in c.execute('SELECT code FROM templates')}
                 available={c for c in TEMPLATE_CODES if (TEMPLATES/(c+'.pdf')).is_file()}|stored
                 self.reply(200,{'available':sorted(available),'missing':[c for c in ['01','inspection','22','03','02','26','24','25','16','LV'] if c not in available]});return
+            if path=='/api/forms':
+                _,settings=state()
+                self.reply(200,{'forms':[{'code':c,'name':name,'visibility':visibility(settings,c),'defaultVisibility':DEFAULT_VISIBILITY[c],'config':form_config(settings,c)} for c,name in FORMS.items()]});return
+            if path=='/api/forms/editor':
+                code=parse_qs(url.query).get('code',[''])[0]
+                if code not in FORMS:raise ValueError('نموذج غير معروف')
+                _,settings=state()
+                with PDF_LOCK:metadata=describe_form(code,settings)
+                self.reply(200,dict(metadata,code=code,visibility=visibility(settings,code),defaultVisibility=DEFAULT_VISIBILITY[code],config=form_config(settings,code)));return
             if path=='/api/migration':
                 self.reply(200,migration_archive(),'application/zip',{'Content-Disposition':'attachment; filename="namothaj-transfer-private.zip"'});return
             if path=='/api/template':
@@ -242,6 +293,8 @@ class Handler(BaseHTTPRequestHandler):
             mime={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8'}.get(file.suffix,'application/octet-stream')
             self.reply(200,file.read_bytes(),mime)
         except (ValueError,FileNotFoundError) as e:self.reply(400,{'error':str(e)})
+        except Exception:
+            traceback.print_exc();self.reply(500,{'error':'تعذر تحميل البيانات. حاول مرة أخرى بعد قليل.'})
     def do_POST(self):
         if not self.authorized():return
         origin=self.headers.get('Origin')
@@ -250,8 +303,26 @@ class Handler(BaseHTTPRequestHandler):
             length=int(self.headers.get('Content-Length',0))
             if length>30_000_000:self.reply(413,{'error':'الحد الأقصى للطلب 30 ميغابايت'});return
             body=json.loads(self.rfile.read(length) or '{}');path=urlparse(self.path).path
+            if path=='/api/forms/save':
+                with PDF_LOCK:settings=save_form_config(body['code'],body['config'])
+                self.reply(200,{'saved':True,'settings':settings});return
+            if path=='/api/forms/preview':
+                code=body['code']
+                if code not in FORMS:raise ValueError('نموذج غير معروف')
+                _,settings=state();config=body.get('config',form_config(settings,code))
+                if body.get('order') is not None:validate(body['order'])
+                with PDF_LOCK:
+                    metadata=describe_form(code)
+                    validate_config(code,config,metadata['fields'])
+                    order=body.get('order') or example_order(settings)
+                    if body.get('previewValues'):
+                        validate_custom_values({code:body['previewValues']})
+                        order.setdefault('customFields',{}).setdefault(code,{}).update(body['previewValues'])
+                    raw=form_image(code,config,order,settings)
+                self.reply(200,raw,'image/png');return
             if path=='/api/migration':self.reply(200,restore_migration(body));return
             if path=='/api/save':
+                if 'settings' in body:validate_settings(body['settings'])
                 put_orders(body.get('orders',[]))
                 if 'settings' in body:
                     with db() as c:c.execute('INSERT INTO settings(id,data) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',(json.dumps(body['settings'],ensure_ascii=False),))
@@ -261,12 +332,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200,{'deleted':True});return
             if path=='/api/import':
                 orders=import_table(body);put_orders(orders);self.reply(200,{'orders':orders});return
-            if path=='/api/missing':self.reply(200,{'questions':missing(body['order']),'forms':selected_forms(body['order']),'lvChecks':lv_checks(body['order'])});return
+            if path=='/api/missing':
+                _,settings=state();self.reply(200,order_status(body['order'],settings));return
+            if path=='/api/missing-batch':
+                items=body.get('orders',[])
+                if not isinstance(items,list) or len(items)>500:raise ValueError('الحد 500 أمر في العملية الواحدة')
+                _,settings=state();self.reply(200,{'statuses':{o['uid']:order_status(o,settings) for o in items}});return
             if path=='/api/export':self.reply(202,{'job':start_export(body['orders'],body.get('format','zip'))});return
             if path=='/api/preview':
                 o=body['order'];validate(o);form=body.get('form')
-                if form and form not in selected_forms(o):raise ValueError('هذا النموذج ليس ضمن أعمال الأمر')
-                with PDF_LOCK:raw=generate(o,form)
+                _,settings=state()
+                if form and form not in selected_forms(o,settings):raise ValueError('هذا النموذج ليس ضمن أعمال الأمر')
+                with PDF_LOCK:raw=generate(o,form,settings)
                 self.reply(200,raw,'application/pdf');return
             self.reply(404,{'error':'غير موجود'})
         except (ValueError,TypeError,KeyError,IndexError) as e:self.reply(400,{'error':str(e)})

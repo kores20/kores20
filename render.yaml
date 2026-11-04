@@ -5,6 +5,7 @@ services:
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: python -m app.server
+    healthCheckPath: /health
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.10

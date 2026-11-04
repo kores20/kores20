@@ -1,5 +1,6 @@
 from copy import deepcopy
 from datetime import date
+from .form_settings import configured_forms, form_config, check_override, needs_field, custom_inputs
 
 QUESTIONS = [
     'بطاقات التعميد والتأهيل متوفرة وسارية لجميع فئات العاملين بالموقع',
@@ -53,12 +54,16 @@ LV_QUESTIONS = [
     'توصيلات الكابلات والأسلاك داخل صندوق العداد محكمة',
 ]
 
-def lv_checks(o):
+def lv_checks(o, settings=None):
     """Fixed LV ticks are derived at use time, including for existing orders."""
     works=set(o.get('works',[]));checked={5,6}
     if 'meter' in works:checked.update([11,12,13,14])
     if 'panel' in works:checked.update([7,8,9,10])
-    return ['نعم' if n in checked else '' for n in range(1,15)]
+    config=form_config(settings,'LV');result=[]
+    for n in range(1,15):
+        override=check_override(config,f'LV.{n}',o)
+        result.append(override if override is not None else 'نعم' if n in checked else '')
+    return result
 
 BASE = ['01','inspection','22','03','02','26']
 PATTERNS = {
@@ -77,30 +82,22 @@ DEFAULTS = {'region':'عسير','division':'الإنشاءات','consultantCompa
 
 def new_order(settings=None):
     d=deepcopy(DEFAULTS);d.update(deepcopy(settings or {}))
+    d.pop('formConfigs',None)
     patterns=d.pop('assessmentPatterns',PATTERNS)
     d.update({'id':'','workCode':'801','consultantCode':'912','date':'','site':'','feeder':'',
-      'description':'','permit':'','mainBreaker':'','date190':'','date200':'','operator':'','operatorId':'',
-      'mode':'bundle','works':['meter'],'meters':[],'skipped':[], 'assessments':deepcopy(patterns),
+      'description':'','permit':'','mainBreaker':'','operator':'','operatorId':'',
+      'mode':'bundle','works':['meter'],'meters':[],'customFields':{},'skipped':[], 'assessments':deepcopy(patterns),
       'inspectionNotes':{'1':'عامل مشارك'},'excavationLength':'','mvSize':'','mvLength':'','lvSize':'','lvLength':'',
       'transformerKva':'','rmuCells':'','voltageKv':'','terminationNotes':'','equipmentNumber':''})
     return d
 
-def selected_forms(o):
-    if o.get('mode')=='inspection':return ['inspection']
-    w=set(o.get('works',[]));forms=BASE.copy()
-    if 'meter' in w:forms+=['24','25','16']
-    if 'excavation' in w:forms+=['05']
-    if w & {'joint','termination'}:forms+=['10']
-    if w & {'transformer','rmu'}:forms+=['09']
-    if 'transformer' in w:forms+=['06-transformer']
-    if 'rmu' in w:forms+=['06-rmu']
-    if 'earthing' in w:forms+=['08']
-    if 'panel' in w:forms+=['07']
-    return forms+['LV']
+def selected_forms(o, settings=None):
+    return configured_forms(o,settings)
 
-def missing(o):
-    skipped=set(o.get('skipped',[]));qs=[]
+def missing(o, settings=None):
+    skipped=set(o.get('skipped',[]));qs=[];forms=selected_forms(o,settings)
     def add(key,label,kind='text',section='بيانات الأمر'):
+        if kind!='assessment' and not needs_field(key,forms,settings):return
         cur=o
         for part in key.split('.'):
             try:cur=cur[int(part)] if isinstance(cur,list) else cur.get(part)
@@ -113,8 +110,8 @@ def missing(o):
         for k,l in [('representative','ممثل ومهندس المقاول'),('site','الحي / الموقع'),('feeder','رقم المغذي / المحطة')]:add(k,l)
     works=set(o.get('works',[])) if o.get('mode')!='inspection' else set()
     if o.get('mode')!='inspection' and not works:add('works','ما الأعمال المنفذة في هذا الأمر؟','works')
-    if 'meter' in works:
-        for k,l,t in [('mainBreaker','سعة القاطع الرئيسي بالأمبير','text'),('date190','تاريخ إجراء 190','date'),('date200','تاريخ إجراء 200','date'),('operator','اسم مدخل البيانات','text'),('operatorId','الرقم الوظيفي لمدخل البيانات','text')]:add(k,l,t,'العدادات')
+    if any(code in forms for code in ['25','16']):
+        for k,l,t in [('mainBreaker','سعة القاطع الرئيسي بالأمبير','text'),('operator','اسم مدخل البيانات','text'),('operatorId','الرقم الوظيفي لمدخل البيانات','text')]:add(k,l,t,'العدادات')
         if not o.get('meters'):add('meters','أضف بيانات العدادات','meters','العدادات')
         for i,m in enumerate(o.get('meters',[])):
             for k,l in [('serial','رقم العداد'),('breaker','قاطع العداد بالأمبير'),('subscription','رقم الاشتراك')]:add(f'meters.{i}.{k}',f'العداد {i+1}: {l}','text','العدادات')
@@ -123,20 +120,27 @@ def missing(o):
             if m.get('ct'):
                 for k,l in [('rating','قوة العداد الفعلية'),('ctRatio','نسبة محولات التيار'),('multiplier','معامل الضرب')]:add(f'meters.{i}.{k}',f'العداد {i+1}: {l}','text','العدادات')
             if m.get('kind')=='إزالة':add(f'meters.{i}.removedReading',f'العداد {i+1}: قراءة الخلع','text','العدادات')
-    if 'excavation' in works:
+    if '05' in forms:
         for k,l in [('excavationLength','طول الحفر بالمتر'),('mvSize','مقاس كابل المتوسط (أو اتركه فارغًا)'),('mvLength','طول كابل المتوسط بالمتر'),('lvSize','مقاس كابل المنخفض (أو اتركه فارغًا)'),('lvLength','طول كابل المنخفض بالمتر')]:add(k,l,'text','الحفر والتمديد')
     for flag,key,label in [('transformer','transformerKva','سعة المحول kVA'),('rmu','rmuCells','عدد خلايا الوحدة الحلقية'),('termination','terminationNotes','مقاسات النهايات وعدد كل منها')]:
-        if flag in works:add(key,label,'text','الأعمال')
+        if flag in works or {'transformer':'06-transformer','rmu':'06-rmu','termination':'10'}[flag] in forms:add(key,label,'text','الأعمال')
+    for field in custom_inputs(o,settings):
+        if field['required']:
+            add(f"customFields.{field['code']}.{field['id']}",field['label'],
+                'date' if field['type']=='date' else 'text',field['form']+' — خانات إضافية')
     # Checklist applicability is explicit; skipped answers remain empty in PDF.
-    for code in selected_forms(o):
+    for code in selected_forms(o,settings):
         if code in ['25','01','02','03','22','LV']:continue
         count={'inspection':26,'26':13,'24':9,'16':9,'05':25,'08':7,'07':13,'09':31,'LV':14,'06-transformer':6,'06-rmu':6}.get(code,0)
         if code=='10':
             for tag,n in [('10-joint',14),('10-termination',13)]:
                 if ('joint' if tag.endswith('joint') else 'termination') in works:
-                    for i in range(n):add(f'assessments.{tag}.{i}',f'{FORMS[code]} — {"لحام" if tag.endswith("joint") else "نهايات"}: البند {i+1}','assessment','التقييمات')
+                    for i in range(n):
+                        if check_override(form_config(settings,code),f'{tag}.{i+1}',o) is None:
+                            add(f'assessments.{tag}.{i}',f'{FORMS[code]} — {"لحام" if tag.endswith("joint") else "نهايات"}: البند {i+1}','assessment','التقييمات')
         else:
             for i in range(count):
+                if check_override(form_config(settings,code),f'{code}.{i+1}',o) is not None:continue
                 if code=='24' and i==3 and not any(m.get('ct') for m in o.get('meters',[])):continue
                 if code=='16' and (i==8 and not any(m.get('ct') for m in o.get('meters',[])) or i==5 and not o.get('temporaryMeter')):continue
                 label=QUESTIONS[i] if code=='inspection' else f'{FORMS[code]} — البند {i+1}'
