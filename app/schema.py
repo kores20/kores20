@@ -85,7 +85,7 @@ def new_order(settings=None):
     d.pop('formConfigs',None)
     patterns=d.pop('assessmentPatterns',PATTERNS)
     d.update({'id':'','workCode':'801','consultantCode':'912','date':'','site':'','feeder':'',
-      'description':'','permit':'','mainBreaker':'','operator':'','operatorId':'',
+      'description':'','permit':'','mainBreaker':'','voltage':'','operator':'','operatorId':'',
       'mode':'bundle','works':['meter'],'meters':[],'customFields':{},'skipped':[], 'assessments':deepcopy(patterns),
       'inspectionNotes':{'1':'عامل مشارك'},'excavationLength':'','mvSize':'','mvLength':'','lvSize':'','lvLength':'',
       'transformerKva':'','rmuCells':'','voltageKv':'','terminationNotes':'','equipmentNumber':''})
@@ -120,6 +120,11 @@ def missing(o, settings=None):
             if m.get('ct'):
                 for k,l in [('rating','قوة العداد الفعلية'),('ctRatio','نسبة محولات التيار'),('multiplier','معامل الضرب')]:add(f'meters.{i}.{k}',f'العداد {i+1}: {l}','text','العدادات')
             if m.get('kind')=='إزالة':add(f'meters.{i}.removedReading',f'العداد {i+1}: قراءة الخلع','text','العدادات')
+    if '25' in forms and not o.get('voltage'):
+        meters=o.get('meters',[])
+        fields=form_config(settings,'25').get('fields',{})
+        if not meters or any(not m.get('voltage') and fields.get(f'meters.{i%10}.voltage',{}).get('mode','auto')=='auto' for i,m in enumerate(meters)):
+            add('voltage','جهد المنخفض لهذا الأمر (فولت)','voltage','العدادات')
     if '05' in forms:
         for k,l in [('excavationLength','طول الحفر بالمتر'),('mvSize','مقاس كابل المتوسط (أو اتركه فارغًا)'),('mvLength','طول كابل المتوسط بالمتر'),('lvSize','مقاس كابل المنخفض (أو اتركه فارغًا)'),('lvLength','طول كابل المنخفض بالمتر')]:add(k,l,'text','الحفر والتمديد')
     for flag,key,label in [('transformer','transformerKva','سعة المحول kVA'),('rmu','rmuCells','عدد خلايا الوحدة الحلقية'),('termination','terminationNotes','مقاسات النهايات وعدد كل منها')]:

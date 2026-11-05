@@ -129,14 +129,14 @@ METER_COLS={'kind':(666,712),'subscription':(622,663),'place':(587,619),'previou
  'serial':(406,502),'rating':(369,404),'digits':(330,366),'reading':(289,327),'removedReading':(258,286),
  'voltage':(226,254),'ctRatio':(185,222),'multiplier':(147,181),'maker':(107,143),'factory':(67,104),'year':(33,64)}
 
-def meter_values(m):
+def meter_values(m,order_voltage=''):
     new=m.get('kind','جديد')!='إزالة';ct=bool(m.get('ct'));s=str(m.get('serial',''))
     prefix=re.match(r'([A-Za-z]+)(\d{2})',s)
     try:rating='160' if float(m.get('breaker',0))>100 else '100'
     except (ValueError,TypeError):rating=''
     return dict(m,kind=m.get('kind','جديد'),place=m.get('place','سكني'),rating=m.get('rating','') if ct else rating,
       digits=m.get('digits','8'),reading=m.get('reading','0' if new else '-'),removedReading=m.get('removedReading','-' if new else ''),
-      voltage=m.get('voltage','400'),ctRatio=m.get('ctRatio','') if ct else '-',multiplier=m.get('multiplier','') if ct else '1',
+      voltage=str(m.get('voltage') or order_voltage or ''),ctRatio=m.get('ctRatio','') if ct else '-',multiplier=m.get('multiplier','') if ct else '1',
       maker=m.get('maker') or ('SMC' if s.upper().startswith('SMR') else prefix[1] if prefix else ''),
       factory=m.get('factory','-'),year=m.get('year') or ('20'+prefix[2] if prefix else ''),breaker=m.get('breaker','') if new else '',
       previous=m.get('previous',m.get('breaker','') if not new else ''))
@@ -145,7 +145,7 @@ def fill_meter(p,o,meters,v):
     for key,box in [('region',[400,113,491,126]),('city',[182,113,300,126]),('id',[400,128,491,140]),('feeder',[182,128,300,140])]:put(p,v.get(key,''),box,key=key)
     put(p,sum(m.get('kind','جديد')!='إزالة' for m in o.get('meters',[])),[400,142,491,154],key='meterCount');put(p,(str(o.get('mainBreaker'))+' A') if o.get('mainBreaker') else '',[182,142,300,154],key='mainBreaker')
     for i in range(10):
-        y=215+i*15.16;values=meter_values(meters[i]) if i<len(meters) else {}
+        y=215+i*15.16;values=meter_values(meters[i],o.get('voltage','')) if i<len(meters) else {}
         for key,(x,x1) in METER_COLS.items():put(p,values.get(key,''),[x,y,x1,y+13.5],key=f'meters.{i}.{key}')
     for key,box in [('representative',[326,383,506,409]),('inspector',[326,414,506,441]),('operator',[436,505,543,537]),('operatorId',[329,505,352,537])]:put(p,v.get(key,''),box,key=key)
 

@@ -80,9 +80,24 @@ with tempfile.TemporaryDirectory() as tmp:
             automatic=page.request.post('http://127.0.0.1:8097/api/missing',data={'order':updated}).json()
             assert [i+1 for i,v in enumerate(automatic['lvChecks']) if v=='نعم']==list(range(5,15))
             page.click('[data-tab="meters"]');page.wait_for_selector('[data-field="mainBreaker"]')
+            page.select_option('[data-field="voltage"]','230')
+            page.wait_for_function("document.querySelector('#save-state').textContent.includes('البيانات محفوظة')")
+            stored=next(o for o in page.request.get('http://127.0.0.1:8097/api/state').json()['orders'] if o['id']=='264900001')
+            assert stored['voltage']=='230'
             assert page.locator('[data-field="date190"], [data-field="date200"]').count()==0
             assert not any(q['key'] in ['date190','date200'] for q in automatic['questions'])
             page.click('[data-close="editor"]')
+            # Missing voltage is a two-choice question, not a hidden 400V default.
+            stored['voltage']='';stored['skipped']+=['mainBreaker','operator','operatorId','meters']
+            page.request.post('http://127.0.0.1:8097/api/save',data={'orders':[stored]})
+            page.reload();page.wait_for_function("document.querySelector('#stat-all').textContent==='32'")
+            page.fill('#search','264900001');page.locator('[data-wizard]').click()
+            page.wait_for_function("document.querySelector('#wizard-content').dataset.kind==='voltage'")
+            page.click('[data-answer="400"]')
+            page.wait_for_function("document.querySelector('#wizard-content').dataset.kind==='assessment'")
+            latest=next(o for o in page.request.get('http://127.0.0.1:8097/api/state').json()['orders'] if o['id']=='264900001')
+            assert latest['voltage']=='400'
+            page.click('[data-close="wizard"]')
             page.locator('#search').fill('');page.evaluate('window.scrollTo(0,0)')
             page.screenshot(path=str(ARTIFACTS/'website-redesign-desktop.png'))
             page.set_viewport_size({'width':390,'height':844});page.screenshot(path=str(ARTIFACTS/'website-redesign-mobile.png'))

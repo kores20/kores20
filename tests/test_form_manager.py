@@ -18,7 +18,7 @@ from app.form_settings import custom_inputs
 def order():
     o=new_order()
     o.update(uid='forms-test',id='264000001',date='2026-10-21',description='تركيب عداد',
-             site='المروج',feeder='000609',permit='1216',mainBreaker='400',operator='عبدالعزيز مفرح',
+             site='المروج',feeder='000609',permit='1216',mainBreaker='400',voltage='400',operator='عبدالعزيز مفرح',
              operatorId='109789',meters=[{'serial':'ECC2520842100000','breaker':'70','subscription':'000000'}])
     return o
 

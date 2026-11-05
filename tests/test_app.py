@@ -19,7 +19,7 @@ from app.schema import new_order, missing, selected_forms, lv_checks
 
 def complete_order():
     o=new_order();o.update(uid=uuid.uuid4().hex,id='264000001',date='2026-10-21',description='تركيب عداد',
-      site='المروج',feeder='000609',permit='1216',mainBreaker='400',date190='2026-10-20',
+      site='المروج',feeder='000609',permit='1216',mainBreaker='400',voltage='400',date190='2026-10-20',
       date200='2026-10-22',operator='عبدالعزيز مفرح',operatorId='109789',
       meters=[{'serial':'ECC2520842109034','breaker':'70','subscription':'4222_0002_00_717649'}])
     return o
@@ -78,6 +78,21 @@ class SchemaTests(unittest.TestCase):
         self.assertEqual(meter_values({'kind':'إزالة','breaker':'30','removedReading':'2006'})['removedReading'],'2006')
         ct=meter_values({'ct':True,'breaker':'200'});self.assertEqual(ct['rating'],'');self.assertEqual(ct['multiplier'],'')
 
+    def test_voltage_varies_by_order_and_missing_voltage_is_not_assumed(self):
+        self.assertEqual(new_order({'voltage':'400'})['voltage'],'')
+        self.assertEqual(meter_values({})['voltage'],'')
+        self.assertEqual(meter_values({},'230')['voltage'],'230')
+        self.assertEqual(meter_values({},'400')['voltage'],'400')
+        self.assertEqual(meter_values({'voltage':'230'},'400')['voltage'],'230')
+        o=complete_order();o.pop('voltage')
+        q=next(q for q in missing(o) if q['key']=='voltage');self.assertEqual(q['kind'],'voltage')
+        o['meters'][0]['voltage']='230'
+        self.assertNotIn('voltage',[q['key'] for q in missing(o)])
+        o['meters'][0].pop('voltage');o['skipped']=['voltage']
+        self.assertNotIn('voltage',[q['key'] for q in missing(o)])
+        o['mode']='inspection';o['skipped']=[]
+        self.assertNotIn('voltage',[q['key'] for q in missing(o)])
+
 
 class PersistenceImportTests(unittest.TestCase):
     def setUp(self):
@@ -90,6 +105,11 @@ class PersistenceImportTests(unittest.TestCase):
         orders=server.import_table({'content':'\n'.join(lines)});self.assertEqual(len(orders),30)
         self.assertTrue(all(o['feeder']=='000609' and o['date']=='2026-10-21' for o in orders))
         server.put_orders(orders);self.assertEqual(len(server.state()[0]),30)
+
+    def test_import_preserves_each_orders_voltage(self):
+        orders=server.import_table({'content':'رقم أمر العمل,الجهد\n264000001,230\n264000002,400'})
+        self.assertEqual([o['voltage'] for o in orders],['230','400'])
+        with self.assertRaises(ValueError):server.import_table({'content':'رقم أمر العمل,الجهد\n264000003,380'})
 
     def test_excel_and_cross_contractor_representative(self):
         wb=Workbook();ws=wb.active;ws.append(['رقم أمر العمل','رمز العمل','تاريخ التنفيذ','المقاول','رقم المغذي'])
@@ -110,6 +130,14 @@ class PersistenceImportTests(unittest.TestCase):
 
 
 class PDFTests(unittest.TestCase):
+    def test_meter_pdf_uses_the_selected_order_voltage(self):
+        o=complete_order()
+        for voltage in ['230','400','']:
+            with self.subTest(voltage=voltage):
+                o['voltage']=voltage
+                with patch('app.pdf_engine.put') as put:fill_meter(None,o,o['meters'],data_values(o))
+                value=next(call.args[1] for call in put.call_args_list if call.kwargs.get('key')=='meters.0.voltage')
+                self.assertEqual(value,voltage)
     def test_original_templates_and_meter_overflow(self):
         o=complete_order();raw=generate(o)
         with fitz.open(stream=raw,filetype='pdf') as doc:

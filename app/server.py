@@ -102,6 +102,8 @@ def validate(o):
         if o.get(k):date.fromisoformat(o[k])
     if any(w not in WORKS for w in o.get('works',[])):raise ValueError('نوع العمل غير معروف')
     if len(o.get('meters',[]))>100:raise ValueError('الحد 100 عداد لكل أمر')
+    for value in [o.get('voltage','')]+[m.get('voltage','') for m in o.get('meters',[])]:
+        if str(value or '') not in ['','230','400']:raise ValueError('جهد المنخفض يجب أن يكون 230 أو 400 فولت')
     for vals in o.get('assessments',{}).values():
         if not isinstance(vals,list) or any(x not in ['',None,'نعم','لا','لا ينطبق'] for x in vals):raise ValueError('تقييم غير صالح')
     validate_custom_values(o.get('customFields',{}))
@@ -167,7 +169,7 @@ def import_table(body):
         rows=[[v.strip() for v in r] for r in rows]
         if delimiter=='|':rows=[[v for i,v in enumerate(r) if not (not v and i in [0,len(r)-1])] for r in rows]
     if len(rows)<2:raise ValueError('أضف صف العناوين ثم بيانات الأوامر')
-    aliases={'رقم أمر العمل':'id','رقم الأمر':'id','رقم الطلب':'id','order':'id','id':'id','التاريخ':'date','تاريخ التنفيذ':'date','date':'date','رمز العمل':'workCode','نوع العمل':'workCode','workCode':'workCode','رمز الاستشاري':'consultantCode','consultantCode':'consultantCode','المدينة':'city','city':'city','الحي':'site','الموقع':'site','site':'site','المقاول':'contractor','contractor':'contractor','ممثل المقاول':'representative','representative':'representative','رقم المغذي':'feeder','feeder':'feeder','رقم التصريح':'permit','permit':'permit','وصف العمل':'description','description':'description'}
+    aliases={'رقم أمر العمل':'id','رقم الأمر':'id','رقم الطلب':'id','order':'id','id':'id','التاريخ':'date','تاريخ التنفيذ':'date','date':'date','رمز العمل':'workCode','نوع العمل':'workCode','workCode':'workCode','رمز الاستشاري':'consultantCode','consultantCode':'consultantCode','المدينة':'city','city':'city','الحي':'site','الموقع':'site','site':'site','المقاول':'contractor','contractor':'contractor','ممثل المقاول':'representative','representative':'representative','رقم المغذي':'feeder','feeder':'feeder','رقم التصريح':'permit','permit':'permit','وصف العمل':'description','description':'description','الجهد':'voltage','الجهد (فولت)':'voltage','جهد المنخفض':'voltage','voltage':'voltage'}
     heads=[aliases.get(str(x or '').strip(),str(x or '').strip()) for x in rows[0]]
     if 'id' not in heads:raise ValueError('أضف عمود «رقم أمر العمل» في الصف الأول')
     result=[]
@@ -286,7 +288,7 @@ class Handler(BaseHTTPRequestHandler):
                 if j.get('state')!='done':self.reply(404,{'error':'الملف غير جاهز'});return
                 self.reply(200,j['raw'],j['mime'],{'Content-Disposition':f'attachment; filename="{j["filename"]}"'});return
             if path=='/api/import-template':
-                sample='رقم أمر العمل,رمز الاستشاري,رمز العمل,المدينة,الحي,المقاول,تاريخ التنفيذ,ممثل المقاول,رقم المغذي\n264000001,912,801,أبها,المروج,أفق البنية,2026-10-21,صدام محمد,000609\n'
+                sample='رقم أمر العمل,رمز الاستشاري,رمز العمل,المدينة,الحي,المقاول,تاريخ التنفيذ,ممثل المقاول,رقم المغذي,الجهد\n264000001,912,801,أبها,المروج,أفق البنية,2026-10-21,صدام محمد,000609,230\n'
                 self.reply(200,b'\xef\xbb\xbf'+sample.encode(),'text/csv; charset=utf-8',{'Content-Disposition':'attachment; filename="orders-template.csv"'});return
             file=STATIC/('index.html' if path=='/' else path.lstrip('/'))
             if STATIC.resolve() not in file.resolve().parents or not file.is_file():self.reply(404,{'error':'غير موجود'});return
