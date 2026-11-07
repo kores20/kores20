@@ -39,6 +39,13 @@ KEYS={
  '24':['id','location','contractor','feeder','representative','inspector'],
  '16':['division','region','id','location','contractor','inspector','inspector'],
 }
+NAME_SIGNATURE_BOXES={
+ '01':{'representative':[85,553,260,573]},
+ '02':{'representative':[402,280,525,295]},
+ '24':{'representative':[53,589,198,611]},
+ '25':{'representative':[130,383,274,409],'operator':[140,505,233,537]},
+ 'LV':{'representative':[108,420.5,225,432.2]},
+}
 
 @lru_cache(maxsize=4096)
 def text_image(text, size):
@@ -175,6 +182,14 @@ def extras(p,code,o,v):
         put(p,o.get('contractor',''),[140,103.5,475,116.7],key='contractor');put(p,o.get('id',''),[159,119.1,477,131.5],key='id');put(p,v['dateText'],[92,435.3,225,447.5],key='dateText')
         put(p,o.get('representative',''),[108,405.6,225,418.6],float(o.get('fontScale',1)),key='representative')
 
+def repeat_names_in_signature_boxes(page,code,o):
+    overlay=ACTIVE.get()
+    for source,box in NAME_SIGNATURE_BOXES.get(code,{}).items():
+        # Follow the already-resolved printed name, including per-form fixed/blank rules.
+        field=next((f for f in overlay.fields if f['kind']=='text' and f['id']==source),None) if overlay else None
+        name=field['example'] if field is not None else o.get(source,'')
+        put(page,name,box,float(o.get('fontScale',1)),key=source+'Signature')
+
 def draw_form(page,src,code,o):
     v=data_values(o)
     if code in KEYS:
@@ -188,6 +203,7 @@ def draw_form(page,src,code,o):
         if code=='02':put(page,o.get('excavationLength',''),[254,398,301,414],key='excavationLength')
     elif code=='25':fill_meter(page,o,o.get('_meterGroup',o.get('meters',[])[:10]),v)
     else:extras(page,code,o,v)
+    repeat_names_in_signature_boxes(page,code,o)
     draw_checks(page,src,code,o)
     if code=='03':page.draw_oval(fitz.Rect(485,327.8,555,343.8),color=BLUE,width=1)
     elif code=='02':page.draw_oval(fitz.Rect(120,272.8,191,289.8),color=BLUE,width=1)

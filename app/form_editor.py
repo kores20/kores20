@@ -11,6 +11,8 @@ LABELS = {
     'id':'رقم أمر العمل', 'feeder':'المغذي / المحطة', 'location':'الموقع', 'dateText':'تاريخ التنفيذ',
     'shortDate':'اليوم والشهر', 'timeText':'الوقت', 'time':'الوقت', 'weekday':'اليوم',
     'representative':'اسم ممثل المقاول', 'inspector':'اسم المفتش / ممثل الاستشاري',
+    'representativeSignature':'اسم ممثل المقاول في خانة التوقيع',
+    'operatorSignature':'اسم مدخل البيانات في خانة التوقيع',
     'consultantShort':'اسم الاستشاري المختصر', 'handoverNotes':'ملاحظات التسليم',
     'department':'المنطقة والدائرة', 'contractorLabel':'المقاول', 'description':'وصف العمل',
     'note1':'ملاحظة البند الأول', 'reportNumber':'رقم التقرير', 'safetyArea':'منطقة تقرير السلامة',

@@ -10,7 +10,7 @@ from PIL import Image, ImageChops
 
 from app import server
 from app.form_editor import validate_config, ACTIVE, Overlay
-from app.pdf_engine import describe_form, form_image, generate, draw_checks
+from app.pdf_engine import describe_form, form_image, generate, draw_checks, NAME_SIGNATURE_BOXES
 from app.schema import new_order, selected_forms, missing, lv_checks, FORMS
 from app.form_settings import custom_inputs
 
@@ -24,6 +24,30 @@ def order():
 
 
 class FormManagerTests(unittest.TestCase):
+    def test_names_print_in_each_matching_signature_box(self):
+        o=order();o.update(representative='ميرزا',operator='عبدالعزيز مفرح')
+        for code,pairs in NAME_SIGNATURE_BOXES.items():
+            with self.subTest(code=code):
+                blank=deepcopy(o)
+                for source in pairs:blank[source]=''
+                before=Image.open(io.BytesIO(form_image(code,{},blank))).convert('RGB')
+                after=Image.open(io.BytesIO(form_image(code,{},o))).convert('RGB')
+                for source,box in pairs.items():
+                    crop=tuple(round(v*1.5) for v in box)
+                    self.assertIsNotNone(ImageChops.difference(before.crop(crop),after.crop(crop)).getbbox(),(code,source))
+                    fields={f['id']:f for f in describe_form(code)['fields']}
+                    self.assertEqual(fields[source+'Signature']['defaultBox'],box)
+
+    def test_signature_name_follows_fixed_or_blank_name_field(self):
+        for code,pairs in NAME_SIGNATURE_BOXES.items():
+            for source in pairs:
+                for mode,text in [('fixed','اسم مختلف للمعاينة'),('blank','')]:
+                    with self.subTest(code=code,source=source,mode=mode):
+                        settings={'formConfigs':{code:{'fields':{source:{'mode':mode,'text':text}}}}}
+                        fields={f['id']:f for f in describe_form(code,settings)['fields']}
+                        self.assertEqual(fields[source]['example'],text)
+                        self.assertEqual(fields[source+'Signature']['example'],text)
+
     def test_added_input_is_per_order_and_respects_required_and_visibility(self):
         o=order();o.pop('customFields')
         field={'mode':'input','label':'اسم الفني','inputType':'text','required':True,'box':[40,710,240,740],'fontSize':22}
