@@ -22,6 +22,7 @@ from .pdf_engine import generate, TEMPLATES, template_path, describe_form, form_
 from .storage import open_db
 from .form_settings import visibility, form_config, check_override, DEFAULT_VISIBILITY, custom_inputs
 from .form_editor import validate_config
+from .signing import KINDS, inspect_asset, signing_config, validate_signing_config
 
 ROOT=Path(__file__).parent
 DATA=Path(os.getenv('DATA_DIR',str(ROOT.parent/'.data')));DATA.mkdir(parents=True,exist_ok=True)
@@ -33,6 +34,9 @@ def migration_archive():
     orders,settings=state();buf=io.BytesIO()
     with zipfile.ZipFile(buf,'w',zipfile.ZIP_DEFLATED) as z:
         z.writestr('orders-backup.json',json.dumps({'orders':orders,'settings':settings},ensure_ascii=False))
+        for kind,asset in signing_assets().items():
+            suffix='png' if asset['metadata']['mime']=='image/png' else 'jpg'
+            z.writestr('signing/'+kind+'.'+suffix,asset['raw'])
         for code in sorted(TEMPLATE_CODES):
             p=TEMPLATES/(code+'.pdf')
             if p.is_file():z.write(p,'templates/'+p.name)
@@ -43,9 +47,9 @@ def migration_archive():
 
 def restore_migration(body):
     raw=base64.b64decode(body.get('base64',''),validate=True)
-    if len(raw)>20_000_000:raise ValueError('حجم حزمة النقل أكبر من 20 ميغابايت')
+    if len(raw)>30_000_000:raise ValueError('حجم حزمة النقل أكبر من 30 ميغابايت')
     import fitz
-    payloads={};backup=None
+    payloads={};backup=None;asset_payloads={}
     with zipfile.ZipFile(io.BytesIO(raw)) as z:
         if len(z.infolist())>300:raise ValueError('عدد ملفات الحزمة أكبر من المسموح')
         total=0
@@ -55,6 +59,10 @@ def restore_migration(body):
             if name=='orders-backup.json':
                 if info.file_size>4_000_000:raise ValueError('نسخة البيانات أكبر من المسموح')
                 backup=json.loads(z.read(info));continue
+            if info.filename in ['signing/signature.png','signing/signature.jpg','signing/stamp.png','signing/stamp.jpg']:
+                if info.file_size>6_000_000:raise ValueError('صورة التوقيع أو الختم أكبر من المسموح')
+                kind=name.rsplit('.',1)[0];raw_asset=z.read(info)
+                asset_payloads[kind]=(raw_asset,inspect_asset(raw_asset,kind));continue
             code=name.removesuffix('.pdf')
             if code not in TEMPLATE_CODES or not name.endswith('.pdf'):continue
             total+=info.file_size
@@ -77,6 +85,8 @@ def restore_migration(body):
         # The database, not the web server's temporary filesystem, owns cloud data.
         with db() as c:
             for code,pdf in payloads.items():c.execute('INSERT INTO templates(code,pdf) VALUES(?,?) ON CONFLICT(code) DO UPDATE SET pdf=excluded.pdf',(code,pdf))
+            for kind,(raw_asset,metadata) in asset_payloads.items():
+                c.execute('INSERT INTO signing_assets(kind,data,metadata) VALUES(?,?,?) ON CONFLICT(kind) DO UPDATE SET data=excluded.data,metadata=excluded.metadata',(kind,raw_asset,json.dumps(metadata)))
         TEMPLATES.mkdir(parents=True,exist_ok=True)
         for code,pdf in payloads.items():
             dest=TEMPLATES/(code+'.pdf');temporary=dest.with_suffix('.pending');temporary.write_bytes(pdf);temporary.replace(dest)
@@ -88,6 +98,28 @@ def restore_migration(body):
 
 def db():
     return open_db(DATA)
+
+def signing_assets():
+    with db() as c:rows=c.execute('SELECT kind,data,metadata FROM signing_assets').fetchall()
+    return {kind:{'raw':bytes(raw),'metadata':json.loads(metadata)} for kind,raw,metadata in rows}
+
+def signing_status():
+    _,settings=state();assets=signing_assets()
+    return {'config':signing_config(settings),'assets':{kind:assets[kind]['metadata'] if kind in assets else None for kind in sorted(KINDS)}}
+
+def store_signing_asset(kind,raw):
+    metadata=inspect_asset(raw,kind)
+    with db() as c:c.execute('INSERT INTO signing_assets(kind,data,metadata) VALUES(?,?,?) ON CONFLICT(kind) DO UPDATE SET data=excluded.data,metadata=excluded.metadata',(kind,raw,json.dumps(metadata)))
+    return metadata
+
+def save_signing_config(config):
+    clean=validate_signing_config(config)
+    with db() as c:
+        c.execute('INSERT INTO settings(id,data) VALUES(1,?) ON CONFLICT(id) DO NOTHING',(json.dumps(DEFAULTS,ensure_ascii=False),))
+        row=c.execute('SELECT data FROM settings WHERE id=1'+(' FOR UPDATE' if c.postgres else '')).fetchone()
+        settings=json.loads(row[0]);settings['signing']=clean
+        c.execute('UPDATE settings SET data=? WHERE id=1',(json.dumps(settings,ensure_ascii=False),))
+    return settings
 
 def state():
     with db() as c:
@@ -119,7 +151,7 @@ def validate_custom_values(values):
 
 def save_form_config(code,config):
     if code not in FORMS:raise ValueError('نموذج غير معروف')
-    specs=describe_form(code)['fields'] if config.get('fields') or config.get('checks') else None
+    specs=describe_form(code)['fields'] if config.get('fields') or config.get('checks') or config.get('images') else None
     clean=validate_config(code,config,specs)
     with db() as c:
         c.execute('INSERT INTO settings(id,data) VALUES(1,?) ON CONFLICT(id) DO NOTHING',(json.dumps(DEFAULTS,ensure_ascii=False),))
@@ -134,6 +166,7 @@ def validate_settings(settings):
     configs=settings.get('formConfigs',{})
     if not isinstance(configs,dict) or any(c not in FORMS for c in configs):raise ValueError('إعدادات النماذج غير صالحة')
     for code,config in configs.items():validate_config(code,config)
+    if 'signing' in settings:validate_signing_config(settings['signing'])
     return settings
 
 def order_status(o,settings):
@@ -207,6 +240,7 @@ def start_export(orders,format_):
         validate(o)
         if not o.get('id'):raise ValueError('رقم الأمر مطلوب قبل التصدير')
     _,settings=state()
+    assets=signing_assets()
     key=uuid.uuid4().hex
     with JOBS_LOCK:
         # Keep recent jobs only; downloads are private to this running instance.
@@ -218,7 +252,7 @@ def start_export(orders,format_):
             blobs=[]
             with PDF_LOCK:
                 for o in orders:
-                    blobs.append((o['id'],generate(o,settings=settings)))
+                    blobs.append((o['id'],generate(o,settings=settings,assets=assets)))
                     with JOBS_LOCK:JOBS[key]['done']+=1
             if len(blobs)==1 and format_=='pdf':raw=blobs[0][1];name=blobs[0][0]+'.pdf';mime='application/pdf'
             else:
@@ -259,6 +293,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.reply(200,{'forms':FORMS,'works':WORKS,'questions':QUESTIONS,'lvQuestions':LV_QUESTIONS,'defaults':DEFAULTS,'patterns':PATTERNS});return
             if path=='/api/new':
                 _,settings=state();o=new_order(settings);o['uid']=uuid.uuid4().hex;self.reply(200,o);return
+            if path=='/api/signing':self.reply(200,signing_status());return
+            if path=='/api/signing/image':
+                kind=parse_qs(url.query).get('kind',[''])[0]
+                if kind not in KINDS:raise ValueError('صورة غير معروفة')
+                asset=signing_assets().get(kind)
+                if not asset:self.reply(404,{'error':'لم ترفع الصورة بعد'});return
+                self.reply(200,asset['raw'],asset['metadata']['mime']);return
             if path=='/api/template-status':
                 with db() as c:stored={r[0] for r in c.execute('SELECT code FROM templates')}
                 available={c for c in TEMPLATE_CODES if (TEMPLATES/(c+'.pdf')).is_file()}|stored
@@ -303,8 +344,18 @@ class Handler(BaseHTTPRequestHandler):
         if origin and urlparse(origin).netloc!=self.headers.get('Host'):self.reply(403,{'error':'مصدر الطلب غير مسموح'});return
         try:
             length=int(self.headers.get('Content-Length',0))
-            if length>30_000_000:self.reply(413,{'error':'الحد الأقصى للطلب 30 ميغابايت'});return
+            if length>42_000_000:self.reply(413,{'error':'الحد الأقصى للطلب 42 ميغابايت'});return
             body=json.loads(self.rfile.read(length) or '{}');path=urlparse(self.path).path
+            if path=='/api/signing/upload':
+                with PDF_LOCK:store_signing_asset(body['kind'],base64.b64decode(body['base64'],validate=True))
+                self.reply(200,signing_status());return
+            if path=='/api/signing/config':
+                settings=save_signing_config(body['config']);self.reply(200,{'settings':settings,'status':signing_status()});return
+            if path=='/api/signing/delete':
+                if body.get('kind') not in KINDS:raise ValueError('صورة غير معروفة')
+                with PDF_LOCK:
+                    with db() as c:c.execute('DELETE FROM signing_assets WHERE kind=?',(body['kind'],))
+                self.reply(200,signing_status());return
             if path=='/api/forms/save':
                 with PDF_LOCK:settings=save_form_config(body['code'],body['config'])
                 self.reply(200,{'saved':True,'settings':settings});return
@@ -320,7 +371,7 @@ class Handler(BaseHTTPRequestHandler):
                     if body.get('previewValues'):
                         validate_custom_values({code:body['previewValues']})
                         order.setdefault('customFields',{}).setdefault(code,{}).update(body['previewValues'])
-                    raw=form_image(code,config,order,settings)
+                    raw=form_image(code,config,order,settings,signing_assets())
                 self.reply(200,raw,'image/png');return
             if path=='/api/migration':self.reply(200,restore_migration(body));return
             if path=='/api/save':
@@ -345,7 +396,7 @@ class Handler(BaseHTTPRequestHandler):
                 o=body['order'];validate(o);form=body.get('form')
                 _,settings=state()
                 if form and form not in selected_forms(o,settings):raise ValueError('هذا النموذج ليس ضمن أعمال الأمر')
-                with PDF_LOCK:raw=generate(o,form,settings)
+                with PDF_LOCK:raw=generate(o,form,settings,signing_assets())
                 self.reply(200,raw,'application/pdf');return
             self.reply(404,{'error':'غير موجود'})
         except (ValueError,TypeError,KeyError,IndexError) as e:self.reply(400,{'error':str(e)})

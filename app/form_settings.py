@@ -53,7 +53,7 @@ FIELD_USES = {
     'date': {'01':['dateText','shortDate'],'inspection':['dateText'],'22':['dateText'],
              '03':['dateText','weekday'],'02':['dateText','weekday'],'LV':['dateText']},
     'contractor': {c:['contractor'] for c in ['01','22','03','02','26','24','16','05','10','06-transformer','06-rmu','08','09','07','LV']},
-    'inspector': {c:['inspector'] for c in ['01','inspection','22','03','02','26','24','16','25','05','10','06-transformer','06-rmu','08','09']},
+    'inspector': {c:['inspector'] for c in ['01','inspection','22','03','02','26','24','16','25','05','10','06-transformer','06-rmu','08','09','07']},
     'representative': {c:['representative'] for c in ['01','02','24','25','LV']},
     'description': {'inspection':['description'],'02':['description']},
     'permit': {'inspection':[]},

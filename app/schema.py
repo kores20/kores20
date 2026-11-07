@@ -83,6 +83,7 @@ DEFAULTS = {'region':'عسير','division':'الإنشاءات','consultantCompa
 def new_order(settings=None):
     d=deepcopy(DEFAULTS);d.update(deepcopy(settings or {}))
     d.pop('formConfigs',None)
+    d.pop('signing',None)
     patterns=d.pop('assessmentPatterns',PATTERNS)
     d.update({'id':'','workCode':'801','consultantCode':'912','date':'','site':'','feeder':'',
       'description':'','permit':'','mainBreaker':'','voltage':'','operator':'','operatorId':'',

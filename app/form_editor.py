@@ -73,6 +73,13 @@ class Overlay:
                             'options':spec.get('options',['نعم','لا','لا ينطبق',''])})
         return dx,dy,rule.get('fontSize',8)/8
 
+    def image(self,key,box,label,asset_kind,applied):
+        rule=self.config.get('images',{}).get(key,{})
+        actual_box=list(rule.get('box',box))
+        self.fields.append({'id':key,'kind':'image','key':key,'label':label,'assetKind':asset_kind,
+                            'defaultBox':list(box),'box':actual_box,'mode':rule.get('mode','auto'),'applied':applied})
+        return actual_box
+
 
 def dimensions(code):
     return (792,612) if code=='25' else (842,595.22) if code=='LV' else (612,792)
@@ -81,7 +88,7 @@ def dimensions(code):
 def validate_config(code, config, field_specs=None):
     from .schema import WORKS
     if not isinstance(config,dict):raise ValueError('إعدادات النموذج غير صالحة')
-    allowed={'visibility','fields','checks'}
+    allowed={'visibility','fields','checks','images'}
     if set(config)-allowed:raise ValueError('إعداد غير معروف للنموذج')
     rule=config.get('visibility')
     if rule is not None:
@@ -93,14 +100,19 @@ def validate_config(code, config, field_specs=None):
     width,height=dimensions(code)
     known={f['id']:f for f in field_specs or []}
     def number(v):return isinstance(v,(float,int)) and not isinstance(v,bool) and math.isfinite(v)
-    for kind in ['fields','checks']:
+    for kind in ['fields','checks','images']:
         entries=config.get(kind,{})
         if not isinstance(entries,dict) or len(entries)>400:raise ValueError('عدد خانات النموذج أكبر من المسموح')
         for key,entry in entries.items():
             if not isinstance(key,str) or len(key)>150 or not isinstance(entry,dict):raise ValueError('خانة غير صالحة')
             extra=key.startswith('custom-') and re.fullmatch(r'custom-[a-zA-Z0-9-]{1,70}',key)
             if field_specs is not None and key not in known and not (kind=='fields' and extra):raise ValueError('خانة غير معروفة في النموذج: '+key)
-            if key in known and (known[key]['kind']=='text')!=(kind=='fields'):raise ValueError('نوع الخانة غير صحيح')
+            if key in known and known[key]['kind']!={'fields':'text','checks':'check','images':'image'}[kind]:raise ValueError('نوع الخانة غير صحيح')
+            if kind=='images':
+                if set(entry)-{'box','mode'} or entry.get('mode','auto') not in ['auto','blank']:raise ValueError('إعداد صورة غير صالح')
+                b=entry.get('box')
+                if b is not None and (not isinstance(b,list) or len(b)!=4 or not all(number(v) for v in b) or not (0<=b[0]<b[2]<=width and 0<=b[1]<b[3]<=height) or b[2]-b[0]<3 or b[3]-b[1]<3):raise ValueError('ضع التوقيع أو الختم داخل حدود الصفحة')
+                continue
             if set(entry)-({'mode','text','box','fontSize','label','inputType','required'} if kind=='fields' else {'mode','value','works','dx','dy','fontSize'}):raise ValueError('إعداد خانة غير معروف')
             modes=['auto','fixed','blank','input'] if kind=='fields' else ['auto','fixed','blank','works']
             if entry.get('mode','auto') not in modes:raise ValueError('اختر طريقة تعبئة صحيحة')

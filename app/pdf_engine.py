@@ -15,6 +15,7 @@ from .schema import selected_forms, lv_checks
 from .storage import read_template
 from .form_editor import ACTIVE, Overlay
 from .form_settings import form_config, check_override
+from .signing import draw_signing
 
 ASSETS=Path(__file__).parent/'assets'
 TEMPLATES=Path(os.getenv('TEMPLATE_DIR',str(ASSETS/'templates')))
@@ -167,6 +168,7 @@ def extras(p,code,o,v):
         put(p,label,[160,474,457,497],key='foundationLabel')
     elif code=='07':
         for k,box in [('division',[110,124,295,137]),('region',[390,124,522,137]),('location',[130,144,295,157]),('id',[415,144,520,157]),('contractor',[140,164,295,177]),('feeder',[423,164,525,177])]:put(p,v.get(k,''),box,key=k)
+        put(p,o.get('inspector',''),[350,565,506,580],key='inspector')
     elif code in ['08','09']:
         boxes=[('division',[151,108,285,121]),('region',[359,108,500,121]),('id',[138,130,231,146]),('id',[158,152,231,169]),('location',[400,128,491,144]),('contractor',[410,153,491,168]),('inspector',[370,563,516,581])]
         if code=='09':boxes=[('division',[139,93,275,102]),('region',[340,91,479,105]),('id',[168,110,274,124]),('id',[168,132,274,146]),('location',[420,110,525,124]),('contractor',[420,132,525,146]),('inspector',[353,656,539,665])]
@@ -190,7 +192,7 @@ def repeat_names_in_signature_boxes(page,code,o):
         name=field['example'] if field is not None else o.get(source,'')
         put(page,name,box,float(o.get('fontScale',1)),key=source+'Signature')
 
-def draw_form(page,src,code,o):
+def draw_form(page,src,code,o,settings=None,assets=None):
     v=data_values(o)
     if code in KEYS:
         for entry,key in zip(LAYOUT[code],KEYS[code]):
@@ -216,6 +218,7 @@ def draw_form(page,src,code,o):
                     text=o.get('customFields',{}).get(code,{}).get(key,'')
                     if rule.get('inputType')=='date':text=date_text(text)
                 put(page,text,rule['box'],key=key)
+        draw_signing(page,code,o,overlay,assets or {},settings)
 
 
 def example_order(settings=None):
@@ -237,24 +240,24 @@ def describe_form(code, settings=None):
     with fitz.open(path) as original:
         doc=fitz.open();page=doc.new_page(width=original[0].rect.width,height=original[0].rect.height)
         overlay=Overlay(code,config,capture=True);token=ACTIVE.set(overlay)
-        try:draw_form(page,original[0],code,example_order(settings))
+        try:draw_form(page,original[0],code,example_order(settings),settings)
         finally:ACTIVE.reset(token);doc.close()
         return {'width':original[0].rect.width,'height':original[0].rect.height,'fields':overlay.fields}
 
 
-def form_image(code, config=None, order=None, settings=None):
+def form_image(code, config=None, order=None, settings=None,assets=None):
     order=order or example_order(settings)
     with fitz.open(template_path('06' if code.startswith('06-') else code)) as original:
         doc=fitz.open();page=doc.new_page(width=original[0].rect.width,height=original[0].rect.height)
         page.show_pdf_page(page.rect,original,0)
         overlay=Overlay(code,config or {});token=ACTIVE.set(overlay)
-        try:draw_form(page,original[0],code,order)
+        try:draw_form(page,original[0],code,order,settings,assets)
         finally:ACTIVE.reset(token)
         raw=page.get_pixmap(matrix=fitz.Matrix(1.5,1.5),alpha=False).tobytes('png')
         doc.close();return raw
 
 
-def generate(o, only_form=None, settings=None):
+def generate(o, only_form=None, settings=None,assets=None):
     result=fitz.open();codes=[only_form] if only_form else selected_forms(o,settings)
     if not codes:raise ValueError('لا توجد نماذج ظاهرة لهذا الأمر؛ راجع قواعد الظهور في إدارة النماذج')
     for code in codes:
@@ -267,7 +270,7 @@ def generate(o, only_form=None, settings=None):
                 src=original[0];page=result.new_page(width=src.rect.width,height=src.rect.height);page.show_pdf_page(page.rect,original,0)
                 order=dict(o,_meterGroup=group) if group is not None else o
                 token=ACTIVE.set(Overlay(code,form_config(settings,code)))
-                try:draw_form(page,src,code,order)
+                try:draw_form(page,src,code,order,settings,assets)
                 finally:ACTIVE.reset(token)
     # Flatten only the finished copies for broad compatibility and bounded file size.
     flattened=fitz.open()
