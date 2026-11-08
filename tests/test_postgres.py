@@ -92,6 +92,10 @@ class PostgreSQLTests(unittest.TestCase):
                     image=Image.new('RGBA',(80,40),(255,255,255,0));ImageDraw.Draw(image).rectangle((8,8,72,32),outline='blue',width=3)
                     image_bytes=io.BytesIO();image.save(image_bytes,format='PNG');stamp=image_bytes.getvalue()
                     server.store_signing_asset('stamp',stamp)
+                    from app import workflow
+                    assets=server.signing_assets()
+                    with server.db() as c:workflow.record_exports(c,[order],server.get_settings(c),assets,workflow.now())
+                    server.set_delivery(order['uid'],'delivered')
                     (templates / '01.pdf').unlink()
                     # Simulate a new Render process with an empty filesystem cache.
                     code = """
@@ -99,12 +103,13 @@ import hashlib, json
 from app import server, pdf_engine
 orders, settings = server.state()
 p = pdf_engine.template_path('01')
-print(json.dumps({'permit': orders[0]['permit'], 'city': settings['city'], 'forms': settings['formConfigs'], 'sha': hashlib.sha256(p.read_bytes()).hexdigest(), 'stamp': hashlib.sha256(server.signing_assets()['stamp']['raw']).hexdigest()}))
+print(json.dumps({'permit': orders[0]['permit'], 'city': settings['city'], 'forms': settings['formConfigs'], 'sha': hashlib.sha256(p.read_bytes()).hexdigest(), 'stamp': hashlib.sha256(server.signing_assets()['stamp']['raw']).hexdigest(), 'stage': server.status_batch(orders,settings)[orders[0]['uid']]['workflow']['stage']}))
 """
                     child = subprocess.run([sys.executable, '-c', code], env=dict(os.environ),
                                            capture_output=True, text=True, check=True)
                     self.assertEqual(json.loads(child.stdout), {'permit': '1216', 'city': 'أبها',
                                                               'forms': {'01': {'visibility': {'mode': 'never'}}},
+                                                              'stage':'delivered',
                                                               'stamp': hashlib.sha256(stamp).hexdigest(),
                                                               'sha': hashlib.sha256(pdf).hexdigest()})
                     with zipfile.ZipFile(io.BytesIO(server.migration_archive())) as z:

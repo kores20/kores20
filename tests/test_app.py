@@ -130,6 +130,9 @@ class PersistenceImportTests(unittest.TestCase):
 
 
 class PDFTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp=tempfile.TemporaryDirectory();self.old=server.DATA;server.DATA=Path(self.tmp.name)
+    def tearDown(self):server.DATA=self.old;self.tmp.cleanup()
     def test_meter_pdf_uses_the_selected_order_voltage(self):
         o=complete_order()
         for voltage in ['230','400','']:

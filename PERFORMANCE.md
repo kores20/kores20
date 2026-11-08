@@ -41,3 +41,9 @@ value survives, and verifies recovery after a failed save. Real PostgreSQL tests
 cover connection reuse, transaction rollback, external settings updates, and
 reconnection after an idle backend is terminated. PDF generation and Render's
 initial cold start are not accelerated or benchmarked by these numbers.
+
+Export/delivery tracking adds two batched metadata reads to a save (progress and
+image versions), rather than a query per order. Switching tabs still performs no
+network request. After an export finishes, one status refresh updates its phase;
+there is no periodic polling of all orders. The missing-data screen renders at
+most 40 rows per page and keeps unsubmitted row values in the browser until Save.

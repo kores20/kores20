@@ -27,7 +27,9 @@ class SavePerformanceTests(unittest.TestCase):
             self.assertEqual(connections.call_count,1)
             self.assertEqual(len(result['statuses']),30)
             self.assertFalse(any('CREATE TABLE' in sql or 'PRAGMA' in sql or 'FROM orders' in sql for sql in statements))
-            self.assertEqual(sum(sql.startswith('SELECT') for sql in statements),1)
+            # Settings, progress records and image metadata; never image bytes or
+            # a query per order, even for a batch of 30.
+            self.assertEqual(sum(sql.startswith('SELECT') for sql in statements),3)
             self.assertEqual(len(server.state()[0]),30)
             self.assertEqual(result['statuses']['batch-0'],server.order_status(orders[0],server.DEFAULTS))
 

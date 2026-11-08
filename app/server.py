@@ -24,6 +24,7 @@ from .form_settings import visibility, form_config, check_override, DEFAULT_VISI
 from .form_editor import validate_config
 from .signing import KINDS, inspect_asset, signing_config, validate_signing_config, signature_asset_kind, same_owner
 from .consultants import CONSULTANTS
+from . import workflow
 
 ROOT=Path(__file__).parent
 DATA=Path(os.getenv('DATA_DIR',str(ROOT.parent/'.data')));DATA.mkdir(parents=True,exist_ok=True)
@@ -34,7 +35,8 @@ TEMPLATE_CODES={c for c in TEMPLATE_CODES if not c.startswith('06-')}
 def migration_archive():
     orders,settings=state();buf=io.BytesIO()
     with zipfile.ZipFile(buf,'w',zipfile.ZIP_DEFLATED) as z:
-        z.writestr('orders-backup.json',json.dumps({'orders':orders,'settings':settings},ensure_ascii=False))
+        with db() as c:progress=workflow.context(c)[0]
+        z.writestr('orders-backup.json',json.dumps({'orders':orders,'settings':settings,'progress':{o['uid']:progress[o['uid']] for o in orders if o['uid'] in progress}},ensure_ascii=False))
         for kind,asset in signing_assets().items():
             suffix='png' if asset['metadata']['mime']=='image/png' else 'jpg'
             z.writestr('signing/'+kind+'.'+suffix,asset['raw'])
@@ -82,6 +84,7 @@ def restore_migration(body):
     if backup:
         for o in backup.get('orders',[]):validate(o)
         if isinstance(backup.get('settings'),dict):validate_settings(backup['settings'])
+        workflow.validate_backup(backup.get('progress',{}),backup.get('orders',[]))
     with PDF_LOCK:
         # The database, not the web server's temporary filesystem, owns cloud data.
         with db() as c:
@@ -93,6 +96,8 @@ def restore_migration(body):
             dest=TEMPLATES/(code+'.pdf');temporary=dest.with_suffix('.pending');temporary.write_bytes(pdf);temporary.replace(dest)
         if backup:
             put_orders(backup.get('orders',[]))
+            with db() as c:
+                for uid,record in backup.get('progress',{}).items():c.execute('INSERT INTO order_progress(uid,data) VALUES(?,?) ON CONFLICT(uid) DO UPDATE SET data=excluded.data',(uid,json.dumps(record)))
             if isinstance(backup.get('settings'),dict):
                 with db() as c:c.execute('INSERT INTO settings(id,data) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',(json.dumps(backup['settings'],ensure_ascii=False),))
     return {'templates':len(payloads),'orders':len(backup.get('orders',[])) if backup else 0}
@@ -186,15 +191,39 @@ def validate_settings(settings):
     if 'signing' in settings:validate_signing_config(settings['signing'])
     return settings
 
-def order_status(o,settings):
+def order_status(o,settings,progress=None,assets=None):
     fixed={}
     for code in selected_forms(o,settings):
         config=form_config(settings,code)
         for key in config.get('checks',{}):
             value=check_override(config,key,o)
             if value is not None:fixed[key]=value
-    return {'questions':missing(o,settings),'forms':selected_forms(o,settings),
-            'lvChecks':lv_checks(o,settings),'fixedChecks':fixed,'customInputs':custom_inputs(o,settings)}
+    questions=missing(o,settings)
+    return {'questions':questions,'forms':selected_forms(o,settings),
+            'lvChecks':lv_checks(o,settings),'fixedChecks':fixed,'customInputs':custom_inputs(o,settings),
+            'workflow':workflow.status(o,settings,progress or {},assets or {},len(questions))}
+
+def status_batch(items,settings,connection=None):
+    if not items:return {}
+    if connection is None:
+        with db() as c:return status_batch(items,settings,c)
+    progress,assets=workflow.context(connection)
+    return {o['uid']:order_status(o,settings,progress.get(o['uid']),assets) for o in items}
+
+def set_delivery(uid,stage):
+    if stage not in ['delivered','exported']:raise ValueError('اختر مرحلة صحيحة')
+    with db() as c:
+        row=c.execute('SELECT data FROM orders WHERE uid=?'+(' FOR UPDATE' if c.postgres else ''),(uid,)).fetchone()
+        if not row:raise ValueError('أمر العمل غير موجود')
+        order=json.loads(row[0]);settings=get_settings(c)
+        c.execute('INSERT INTO order_progress(uid,data) VALUES(?,?) ON CONFLICT(uid) DO NOTHING',(uid,'{}'))
+        record=json.loads(c.execute('SELECT data FROM order_progress WHERE uid=?'+(' FOR UPDATE' if c.postgres else ''),(uid,)).fetchone()[0])
+        _,assets=workflow.context(c)
+        current=order_status(order,settings,record,assets)['workflow']
+        if stage=='delivered' and current['stage'] not in ['exported','delivered']:raise ValueError('صدّر النسخة الحالية من الأمر قبل تسجيل التسليم')
+        record['deliveredAt']=workflow.now() if stage=='delivered' else ''
+        c.execute('UPDATE order_progress SET data=? WHERE uid=?',(json.dumps(record),uid))
+        return order_status(order,settings,record,assets)
 
 def put_orders(orders,connection=None):
     if len(orders)>500:raise ValueError('الحد 500 أمر في العملية الواحدة')
@@ -207,13 +236,16 @@ def save_changes(body):
     """Save a batch and calculate its missing data in the same request."""
     if 'settings' in body:validate_settings(body['settings'])
     items=body.get('orders',[])
+    if 'progress' in body:workflow.validate_backup(body['progress'],items)
     with db() as c:
         put_orders(items,c)
         if 'settings' in body:
             c.execute('INSERT INTO settings(id,data) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',(json.dumps(body['settings'],ensure_ascii=False),))
             settings=body['settings']
         else:settings=get_settings(c)
-    return {'saved':True,'statuses':{o['uid']:order_status(o,settings) for o in items}}
+        for uid,record in body.get('progress',{}).items():c.execute('INSERT INTO order_progress(uid,data) VALUES(?,?) ON CONFLICT(uid) DO UPDATE SET data=excluded.data',(uid,json.dumps(record)))
+        statuses=status_batch(items,settings,c)
+    return {'saved':True,'statuses':statuses}
 
 def import_table(body):
     settings=get_settings();year=int(body.get('year',date.today().year))
@@ -269,6 +301,8 @@ def start_export(orders,format_):
     for o in orders:
         validate(o)
         if not o.get('id'):raise ValueError('رقم الأمر مطلوب قبل التصدير')
+    from copy import deepcopy
+    orders=deepcopy(orders);started_at=workflow.now()
     settings=get_settings()
     assets=signing_assets()
     key=uuid.uuid4().hex
@@ -290,6 +324,7 @@ def start_export(orders,format_):
                 with zipfile.ZipFile(buf,'w',zipfile.ZIP_DEFLATED) as z:
                     for index,(oid,blob) in enumerate(blobs,1):z.writestr(f'{index:02d}-{oid}.pdf',blob)
                 raw=buf.getvalue();name='work-orders.zip';mime='application/zip'
+            with db() as c:workflow.record_exports(c,orders,settings,assets,started_at)
             with JOBS_LOCK:JOBS[key].update(state='done',raw=raw,filename=name,mime=mime)
         except Exception:
             traceback.print_exc()
@@ -318,7 +353,11 @@ class Handler(BaseHTTPRequestHandler):
         url=urlparse(self.path);path=unquote(url.path)
         try:
             if path=='/api/state':
-                orders,settings=state();self.reply(200,{'orders':orders,'settings':settings,'statuses':{o['uid']:order_status(o,settings) for o in orders}});return
+                orders,settings=state();self.reply(200,{'orders':orders,'settings':settings,'statuses':status_batch(orders,settings)});return
+            if path=='/api/backup':
+                orders,settings=state()
+                with db() as c:progress=workflow.context(c)[0]
+                self.reply(200,{'orders':orders,'settings':settings,'progress':{o['uid']:progress[o['uid']] for o in orders if o['uid'] in progress}});return
             if path=='/api/schema':
                 self.reply(200,{'forms':FORMS,'works':WORKS,'questions':QUESTIONS,'lvQuestions':LV_QUESTIONS,'defaults':DEFAULTS,'patterns':PATTERNS,'consultants':CONSULTANTS});return
             if path=='/api/new':
@@ -404,16 +443,19 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/migration':self.reply(200,restore_migration(body));return
             if path=='/api/save':self.reply(200,save_changes(body));return
             if path=='/api/delete':
-                with db() as c:c.execute('DELETE FROM orders WHERE uid=?',(body['uid'],))
+                with db() as c:
+                    c.execute('DELETE FROM orders WHERE uid=?',(body['uid'],))
+                    c.execute('DELETE FROM order_progress WHERE uid=?',(body['uid'],))
                 self.reply(200,{'deleted':True});return
+            if path=='/api/progress':self.reply(200,set_delivery(body['uid'],body['stage']));return
             if path=='/api/import':
                 orders=import_table(body);put_orders(orders);self.reply(200,{'orders':orders});return
             if path=='/api/missing':
-                settings=get_settings();self.reply(200,order_status(body['order'],settings));return
+                settings=get_settings();self.reply(200,status_batch([body['order']],settings)[body['order']['uid']]);return
             if path=='/api/missing-batch':
                 items=body.get('orders',[])
                 if not isinstance(items,list) or len(items)>500:raise ValueError('الحد 500 أمر في العملية الواحدة')
-                settings=get_settings();self.reply(200,{'statuses':{o['uid']:order_status(o,settings) for o in items}});return
+                settings=get_settings();self.reply(200,{'statuses':status_batch(items,settings)});return
             if path=='/api/export':self.reply(202,{'job':start_export(body['orders'],body.get('format','zip'))});return
             if path=='/api/preview':
                 o=body['order'];validate(o);form=body.get('form')
