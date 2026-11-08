@@ -105,7 +105,7 @@ def missing(o, settings=None):
             except (TypeError,IndexError,AttributeError,ValueError):cur=None
         if (cur is None or str(cur).strip()=='' or cur==[]) and key not in skipped:
             qs.append({'key':key,'label':label,'kind':kind,'section':section})
-    for key,label,kind in [('id','رقم أمر العمل','text'),('date','تاريخ التنفيذ / الزيارة','date'),('contractor','اسم المقاول','text'),('inspector','اسم المفتش وممثل الاستشاري','text'),('description','وصف العمل بالموقع','text')]:add(key,label,kind)
+    for key,label,kind in [('id','رقم أمر العمل','text'),('date','تاريخ التنفيذ / الزيارة','date'),('contractor','اسم المقاول','text'),('inspector','اسم المفتش وممثل الاستشاري','inspector'),('description','وصف العمل بالموقع','text')]:add(key,label,kind)
     add('permit','رقم تصريح العمل')
     if o.get('mode')!='inspection':
         for k,l in [('representative','ممثل ومهندس المقاول'),('site','الحي / الموقع'),('feeder','رقم المغذي / المحطة')]:add(k,l)

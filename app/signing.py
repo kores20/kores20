@@ -6,27 +6,28 @@ import unicodedata
 
 import fitz
 from PIL import Image, ImageChops
+from .consultants import CONSULTANTS
 
-KINDS={'signature','stamp'}
+KINDS={'signature','stamp'}|{c['signatureKind'] for c in CONSULTANTS}
 DEFAULT_SIGNING={'owner':'علي الشهري','signatureEnabled':True,'stampEnabled':True}
 # Source ids identify the printed consultant's name, not the contractor or PDC.
 SIGNATURE_BOXES={
- '01':[('inspector',[90,591,258,613],'توقيعك — ممثل الاستشاري')],
- 'inspection':[('inspector#2',[75,656,236,672],'توقيعك — ممثل الاستشاري')],
- '22':[('inspector#2',[195,225,310,248],'توقيعك — معد التقرير'),('inspector#3',[55,566,167,584],'توقيعك — ممثل الاستشاري')],
- '03':[('inspector#2',[40,591,232,612],'توقيعك — ممثل الاستشاري'),('inspector#3',[40,662,232,682],'توقيعك — المهندس المختص')],
- '02':[('inspector#2',[75,584,225,609],'توقيعك — ممثل الاستشاري')],
- '26':[('inspector',[105,596,274,621],'توقيعك — ممثل الاستشاري')],
- '24':[('inspector',[53,616,198,638],'توقيعك — ممثل الاستشاري')],
- '25':[('inspector',[130,414,274,441],'توقيعك — ممثل الاستشاري')],
- '16':[('inspector',[155,467,328,494],'توقيعك — ممثل الاستشاري'),('inspector#2',[115,578,285,590],'توقيعك — Inspector sign')],
- '05':[('inspector',[353,641,528,664],'توقيعك — ممثل الاستشاري')],
- '10':[('inspector',[350,616.5,540,632.5],'توقيعك — ممثل الاستشاري')],
- '09':[('inspector',[355,679,540,689],'توقيعك — ممثل الاستشاري')],
- '06-transformer':[('inspector',[150,518,310,545],'توقيعك — ممثل الاستشاري')],
- '06-rmu':[('inspector',[150,518,310,545],'توقيعك — ممثل الاستشاري')],
- '08':[('inspector',[160,565,345,594],'توقيعك — ممثل الاستشاري')],
- '07':[('inspector',[350,582,536,605],'توقيعك — ممثل الاستشاري')],
+ '01':[('inspector',[90,591,258,613],'التوقيع — ممثل الاستشاري')],
+ 'inspection':[('inspector#2',[75,656,236,672],'التوقيع — ممثل الاستشاري')],
+ '22':[('inspector#2',[195,225,310,248],'التوقيع — معد التقرير'),('inspector#3',[55,566,167,584],'التوقيع — ممثل الاستشاري')],
+ '03':[('inspector#2',[40,591,232,612],'التوقيع — ممثل الاستشاري'),('inspector#3',[40,662,232,682],'التوقيع — المهندس المختص')],
+ '02':[('inspector#2',[75,584,225,609],'التوقيع — ممثل الاستشاري')],
+ '26':[('inspector',[105,596,274,621],'التوقيع — ممثل الاستشاري')],
+ '24':[('inspector',[53,616,198,638],'التوقيع — ممثل الاستشاري')],
+ '25':[('inspector',[130,414,274,441],'التوقيع — ممثل الاستشاري')],
+ '16':[('inspector',[155,467,328,494],'التوقيع — ممثل الاستشاري'),('inspector#2',[115,578,285,590],'التوقيع — Inspector sign')],
+ '05':[('inspector',[353,641,528,664],'التوقيع — ممثل الاستشاري')],
+ '10':[('inspector',[350,616.5,540,632.5],'التوقيع — ممثل الاستشاري')],
+ '09':[('inspector',[355,679,540,689],'التوقيع — ممثل الاستشاري')],
+ '06-transformer':[('inspector',[150,518,310,545],'التوقيع — ممثل الاستشاري')],
+ '06-rmu':[('inspector',[150,518,310,545],'التوقيع — ممثل الاستشاري')],
+ '08':[('inspector',[160,565,345,594],'التوقيع — ممثل الاستشاري')],
+ '07':[('inspector',[350,582,536,605],'التوقيع — ممثل الاستشاري')],
 }
 
 
@@ -77,6 +78,16 @@ def same_owner(name,owner):
     return bool(normalized(name)) and normalized(name)==normalized(owner)
 
 
+def signature_asset_kind(name,assets,settings=None):
+    """Resolve separate originals, retaining the previous single-owner upload."""
+    for consultant in CONSULTANTS:
+        if same_owner(name,consultant['name']) and assets.get(consultant['signatureKind']):
+            return consultant['signatureKind']
+    # The legacy owner is never changed when choosing another consultant in the UI.
+    if assets.get('signature') and same_owner(name,signing_config(settings)['owner']):return 'signature'
+    return None
+
+
 def stamp_box(code,width,height):
     if code=='25':return [24,559,160,608]
     if code=='LV':return [24,497,184,570]
@@ -103,9 +114,10 @@ def draw_signing(page,code,order,overlay,assets,settings=None):
         key='consultantSignature'+(f'#{i+1}' if i else '')
         field=next((f for f in overlay.fields if f['kind']=='text' and f['id']==source),None)
         name=field['example'] if field else order.get('inspector','')
-        allowed=config['signatureEnabled'] and same_owner(name,config['owner'])
-        actual_box=overlay.image(key,box,label,'signature',allowed and bool(assets.get('signature')))
-        if not overlay.capture and allowed and assets.get('signature') and image_rules.get(key,{}).get('mode','auto')!='blank':draw_asset(page,assets['signature'],actual_box)
+        kind=signature_asset_kind(name,assets,settings) if same_owner(name,order.get('inspector','')) else None
+        allowed=config['signatureEnabled'] and kind is not None
+        actual_box=overlay.image(key,box,label,'signature',allowed)
+        if not overlay.capture and allowed and image_rules.get(key,{}).get('mode','auto')!='blank':draw_asset(page,assets[kind],actual_box)
     box=stamp_box(code,page.rect.width,page.rect.height)
     actual_box=overlay.image('consultantStamp',box,'الختم — أسفل يسار الصفحة','stamp',config['stampEnabled'] and bool(assets.get('stamp')))
     if not overlay.capture and config['stampEnabled'] and assets.get('stamp') and image_rules.get('consultantStamp',{}).get('mode','auto')!='blank':draw_asset(page,assets['stamp'],actual_box)

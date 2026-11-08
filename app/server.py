@@ -22,7 +22,8 @@ from .pdf_engine import generate, TEMPLATES, template_path, describe_form, form_
 from .storage import open_db
 from .form_settings import visibility, form_config, check_override, DEFAULT_VISIBILITY, custom_inputs
 from .form_editor import validate_config
-from .signing import KINDS, inspect_asset, signing_config, validate_signing_config
+from .signing import KINDS, inspect_asset, signing_config, validate_signing_config, signature_asset_kind, same_owner
+from .consultants import CONSULTANTS
 
 ROOT=Path(__file__).parent
 DATA=Path(os.getenv('DATA_DIR',str(ROOT.parent/'.data')));DATA.mkdir(parents=True,exist_ok=True)
@@ -59,7 +60,7 @@ def restore_migration(body):
             if name=='orders-backup.json':
                 if info.file_size>4_000_000:raise ValueError('نسخة البيانات أكبر من المسموح')
                 backup=json.loads(z.read(info));continue
-            if info.filename in ['signing/signature.png','signing/signature.jpg','signing/stamp.png','signing/stamp.jpg']:
+            if info.filename in {f'signing/{kind}.{suffix}' for kind in KINDS for suffix in ['png','jpg']}:
                 if info.file_size>6_000_000:raise ValueError('صورة التوقيع أو الختم أكبر من المسموح')
                 kind=name.rsplit('.',1)[0];raw_asset=z.read(info)
                 asset_payloads[kind]=(raw_asset,inspect_asset(raw_asset,kind));continue
@@ -106,12 +107,21 @@ def signing_assets():
 def signing_status():
     settings=get_settings()
     with db() as c:assets={kind:json.loads(metadata) for kind,metadata in c.execute('SELECT kind,metadata FROM signing_assets')}
-    return {'config':signing_config(settings),'assets':{kind:assets.get(kind) for kind in sorted(KINDS)}}
+    return {'config':signing_config(settings),'assets':{kind:assets.get(kind) for kind in sorted(KINDS)},
+            'consultants':[dict(c,assetKind=signature_asset_kind(c['name'],assets,settings)) for c in CONSULTANTS]}
 
 def store_signing_asset(kind,raw):
     metadata=inspect_asset(raw,kind)
     with db() as c:c.execute('INSERT INTO signing_assets(kind,data,metadata) VALUES(?,?,?) ON CONFLICT(kind) DO UPDATE SET data=excluded.data,metadata=excluded.metadata',(kind,raw,json.dumps(metadata)))
     return metadata
+
+def delete_signing_asset(kind):
+    if kind not in KINDS:raise ValueError('صورة غير معروفة')
+    with db() as c:
+        # Deleting a consultant also removes their old upload, so it cannot reappear.
+        owner=signing_config(get_settings(c))['owner']
+        legacy=any(profile['signatureKind']==kind and same_owner(profile['name'],owner) for profile in CONSULTANTS)
+        c.execute('DELETE FROM signing_assets WHERE kind=? OR kind=?',(kind,'signature' if legacy else kind))
 
 def save_signing_config(config):
     clean=validate_signing_config(config)
@@ -222,7 +232,7 @@ def import_table(body):
         rows=[[v.strip() for v in r] for r in rows]
         if delimiter=='|':rows=[[v for i,v in enumerate(r) if not (not v and i in [0,len(r)-1])] for r in rows]
     if len(rows)<2:raise ValueError('أضف صف العناوين ثم بيانات الأوامر')
-    aliases={'رقم أمر العمل':'id','رقم الأمر':'id','رقم الطلب':'id','order':'id','id':'id','التاريخ':'date','تاريخ التنفيذ':'date','date':'date','رمز العمل':'workCode','نوع العمل':'workCode','workCode':'workCode','رمز الاستشاري':'consultantCode','consultantCode':'consultantCode','المدينة':'city','city':'city','الحي':'site','الموقع':'site','site':'site','المقاول':'contractor','contractor':'contractor','ممثل المقاول':'representative','representative':'representative','رقم المغذي':'feeder','feeder':'feeder','رقم التصريح':'permit','permit':'permit','وصف العمل':'description','description':'description','الجهد':'voltage','الجهد (فولت)':'voltage','جهد المنخفض':'voltage','voltage':'voltage'}
+    aliases={'رقم أمر العمل':'id','رقم الأمر':'id','رقم الطلب':'id','order':'id','id':'id','التاريخ':'date','تاريخ التنفيذ':'date','date':'date','رمز العمل':'workCode','نوع العمل':'workCode','workCode':'workCode','رمز الاستشاري':'consultantCode','consultantCode':'consultantCode','المدينة':'city','city':'city','الحي':'site','الموقع':'site','site':'site','المقاول':'contractor','contractor':'contractor','ممثل الاستشاري':'inspector','المفتش':'inspector','inspector':'inspector','ممثل المقاول':'representative','representative':'representative','رقم المغذي':'feeder','feeder':'feeder','رقم التصريح':'permit','permit':'permit','وصف العمل':'description','description':'description','الجهد':'voltage','الجهد (فولت)':'voltage','جهد المنخفض':'voltage','voltage':'voltage'}
     heads=[aliases.get(str(x or '').strip(),str(x or '').strip()) for x in rows[0]]
     if 'id' not in heads:raise ValueError('أضف عمود «رقم أمر العمل» في الصف الأول')
     result=[]
@@ -310,7 +320,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/state':
                 orders,settings=state();self.reply(200,{'orders':orders,'settings':settings,'statuses':{o['uid']:order_status(o,settings) for o in orders}});return
             if path=='/api/schema':
-                self.reply(200,{'forms':FORMS,'works':WORKS,'questions':QUESTIONS,'lvQuestions':LV_QUESTIONS,'defaults':DEFAULTS,'patterns':PATTERNS});return
+                self.reply(200,{'forms':FORMS,'works':WORKS,'questions':QUESTIONS,'lvQuestions':LV_QUESTIONS,'defaults':DEFAULTS,'patterns':PATTERNS,'consultants':CONSULTANTS});return
             if path=='/api/new':
                 settings=get_settings();o=new_order(settings);o['uid']=uuid.uuid4().hex;self.reply(200,o);return
             if path=='/api/signing':self.reply(200,signing_status());return
@@ -372,9 +382,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/signing/config':
                 settings=save_signing_config(body['config']);self.reply(200,{'settings':settings,'status':signing_status()});return
             if path=='/api/signing/delete':
-                if body.get('kind') not in KINDS:raise ValueError('صورة غير معروفة')
-                with PDF_LOCK:
-                    with db() as c:c.execute('DELETE FROM signing_assets WHERE kind=?',(body['kind'],))
+                with PDF_LOCK:delete_signing_asset(body.get('kind'))
                 self.reply(200,signing_status());return
             if path=='/api/forms/save':
                 with PDF_LOCK:settings=save_form_config(body['code'],body['config'])

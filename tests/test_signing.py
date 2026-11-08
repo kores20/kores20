@@ -14,7 +14,7 @@ from PIL import Image, ImageChops, ImageDraw
 from app import server
 from app.pdf_engine import describe_form, example_order, form_image, generate
 from app.schema import FORMS, WORKS, new_order
-from app.signing import inspect_asset, draw_asset, same_owner
+from app.signing import inspect_asset, draw_asset, same_owner, signature_asset_kind
 
 
 def fixture(kind):
@@ -60,6 +60,55 @@ class SigningTests(unittest.TestCase):
         self.assertTrue(same_owner('عَلِي الشَّهري','علي الشهري'))
         self.assertFalse(same_owner('محمد إبراهيم','علي الشهري'))
 
+    def test_consultant_choice_selects_only_its_own_signature(self):
+        ali=fixture('signature');faisal=fixture('stamp')
+        assets={'signature':ali,'signature-faisal':faisal}
+        o=example_order();o['inspector']='فيصل العمري'
+        # A missing Faisal upload leaves the box empty despite the old Ali upload.
+        self.assertEqual(form_image('24',{},o),form_image('24',{},o,assets={'signature':ali}))
+        self.assertEqual(signature_asset_kind('علي الشهري',assets),'signature')
+        self.assertEqual(signature_asset_kind('فيصل العمري',assets),'signature-faisal')
+        with patch('app.signing.draw_asset') as drawn:
+            form_image('24',{},o,assets=assets)
+        self.assertEqual(len(drawn.call_args_list),1)
+        self.assertIs(drawn.call_args.args[1],faisal)
+        # An explicit different name/blank in a form never gets another signature.
+        for rule in [{'mode':'blank'},{'mode':'fixed','text':'علي الشهري'}]:
+            with patch('app.signing.draw_asset') as drawn:
+                form_image('24',{'fields':{'inspector':rule}},o,assets=assets)
+            drawn.assert_not_called()
+        o['inspector']='علي الشهري'
+        with patch('app.signing.draw_asset') as drawn:
+            form_image('24',{},o,assets=assets)
+        self.assertIs(drawn.call_args.args[1],ali)
+
+    def test_profile_uploads_and_delete_do_not_affect_other_consultant(self):
+        raw=fixture('signature')['raw']
+        for kind in ['signature','signature-ali','signature-faisal','stamp']:server.store_signing_asset(kind,raw)
+        status=server.signing_status()
+        self.assertEqual({p['name']:p['assetKind'] for p in status['consultants']},
+            {'علي الشهري':'signature-ali','فيصل العمري':'signature-faisal'})
+        server.delete_signing_asset('signature-ali')
+        self.assertNotIn('signature',server.signing_assets())
+        self.assertNotIn('signature-ali',server.signing_assets())
+        self.assertIn('signature-faisal',server.signing_assets());self.assertIn('stamp',server.signing_assets())
+        status=server.signing_status()
+        self.assertIsNone(status['consultants'][0]['assetKind'])
+        self.assertEqual(status['consultants'][1]['assetKind'],'signature-faisal')
+
+    def test_choice_is_preserved_per_order_defaults_and_table_import(self):
+        ali=new_order();faisal=new_order({'inspector':'فيصل العمري'})
+        self.assertEqual(ali['inspector'],'علي الشهري');self.assertEqual(faisal['inspector'],'فيصل العمري')
+        ali.update(uid='ali-order',id='264000001');faisal.update(uid='faisal-order',id='264000002')
+        server.put_orders([ali,faisal])
+        self.assertEqual({o['uid']:o['inspector'] for o in server.state()[0]},
+            {'ali-order':'علي الشهري','faisal-order':'فيصل العمري'})
+        imported=server.import_table({'content':'رقم أمر العمل,ممثل الاستشاري\n264000003,فيصل العمري'})
+        self.assertEqual(imported[0]['inspector'],'فيصل العمري')
+        for code in FORMS:
+            names=[f['example'] for f in describe_form(code,{'inspector':'فيصل العمري'})['fields'] if f['kind']=='text' and f['key']=='inspector']
+            self.assertTrue(all(name=='فيصل العمري' for name in names),code)
+
     def test_signature_and_stamp_change_only_their_reviewed_regions(self):
         o=example_order();assets={k:fixture(k) for k in ['signature','stamp']}
         before=Image.open(io.BytesIO(form_image('24',{},o))).convert('RGB')
@@ -98,7 +147,7 @@ class SigningTests(unittest.TestCase):
     def test_transfer_bundle_contains_private_images_and_restores_them(self):
         old_templates=server.TEMPLATES;server.TEMPLATES=Path(self.tmp.name)/'templates';server.TEMPLATES.mkdir()
         doc=fitz.open();doc.new_page(width=612,height=792);doc.save(server.TEMPLATES/'01.pdf');doc.close()
-        assets={k:fixture(k) for k in ['signature','stamp']}
+        assets={k:fixture('signature' if k.startswith('signature') else k) for k in ['signature','signature-ali','signature-faisal','stamp']}
         try:
             for kind,asset in assets.items():server.store_signing_asset(kind,asset['raw'])
             raw=server.migration_archive()
