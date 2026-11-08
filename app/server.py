@@ -104,8 +104,9 @@ def signing_assets():
     return {kind:{'raw':bytes(raw),'metadata':json.loads(metadata)} for kind,raw,metadata in rows}
 
 def signing_status():
-    _,settings=state();assets=signing_assets()
-    return {'config':signing_config(settings),'assets':{kind:assets[kind]['metadata'] if kind in assets else None for kind in sorted(KINDS)}}
+    settings=get_settings()
+    with db() as c:assets={kind:json.loads(metadata) for kind,metadata in c.execute('SELECT kind,metadata FROM signing_assets')}
+    return {'config':signing_config(settings),'assets':{kind:assets.get(kind) for kind in sorted(KINDS)}}
 
 def store_signing_asset(kind,raw):
     metadata=inspect_asset(raw,kind)
@@ -126,6 +127,12 @@ def state():
         rows=[json.loads(r[0]) for r in c.execute('SELECT data FROM orders ORDER BY updated_at DESC, uid DESC')]
         settings=c.execute('SELECT data FROM settings WHERE id=1').fetchone()
     return rows,json.loads(settings[0]) if settings else DEFAULTS
+
+def get_settings(connection=None):
+    if connection is None:
+        with db() as c:return get_settings(c)
+    row=connection.execute('SELECT data FROM settings WHERE id=1').fetchone()
+    return json.loads(row[0]) if row else DEFAULTS
 
 def validate(o):
     if not isinstance(o,dict):raise ValueError('بيانات الأمر غير صالحة')
@@ -179,14 +186,27 @@ def order_status(o,settings):
     return {'questions':missing(o,settings),'forms':selected_forms(o,settings),
             'lvChecks':lv_checks(o,settings),'fixedChecks':fixed,'customInputs':custom_inputs(o,settings)}
 
-def put_orders(orders):
+def put_orders(orders,connection=None):
     if len(orders)>500:raise ValueError('الحد 500 أمر في العملية الواحدة')
     for o in orders:validate(o)
+    if connection is None:
+        with db() as c:return put_orders(orders,c)
+    if orders:connection.executemany('INSERT INTO orders(uid,data,updated_at) VALUES (?,?,?) ON CONFLICT(uid) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at',[(o['uid'],json.dumps(o,ensure_ascii=False),datetime.now().isoformat()) for o in orders])
+
+def save_changes(body):
+    """Save a batch and calculate its missing data in the same request."""
+    if 'settings' in body:validate_settings(body['settings'])
+    items=body.get('orders',[])
     with db() as c:
-        for o in orders:c.execute('INSERT INTO orders(uid,data,updated_at) VALUES (?,?,?) ON CONFLICT(uid) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at',(o['uid'],json.dumps(o,ensure_ascii=False),datetime.now().isoformat()))
+        put_orders(items,c)
+        if 'settings' in body:
+            c.execute('INSERT INTO settings(id,data) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',(json.dumps(body['settings'],ensure_ascii=False),))
+            settings=body['settings']
+        else:settings=get_settings(c)
+    return {'saved':True,'statuses':{o['uid']:order_status(o,settings) for o in items}}
 
 def import_table(body):
-    _,settings=state();year=int(body.get('year',date.today().year))
+    settings=get_settings();year=int(body.get('year',date.today().year))
     if body.get('filename','').lower().endswith('.xlsx'):
         from openpyxl import load_workbook
         data=base64.b64decode(body['base64'],validate=True)
@@ -239,7 +259,7 @@ def start_export(orders,format_):
     for o in orders:
         validate(o)
         if not o.get('id'):raise ValueError('رقم الأمر مطلوب قبل التصدير')
-    _,settings=state()
+    settings=get_settings()
     assets=signing_assets()
     key=uuid.uuid4().hex
     with JOBS_LOCK:
@@ -288,11 +308,11 @@ class Handler(BaseHTTPRequestHandler):
         url=urlparse(self.path);path=unquote(url.path)
         try:
             if path=='/api/state':
-                orders,settings=state();self.reply(200,{'orders':orders,'settings':settings});return
+                orders,settings=state();self.reply(200,{'orders':orders,'settings':settings,'statuses':{o['uid']:order_status(o,settings) for o in orders}});return
             if path=='/api/schema':
                 self.reply(200,{'forms':FORMS,'works':WORKS,'questions':QUESTIONS,'lvQuestions':LV_QUESTIONS,'defaults':DEFAULTS,'patterns':PATTERNS});return
             if path=='/api/new':
-                _,settings=state();o=new_order(settings);o['uid']=uuid.uuid4().hex;self.reply(200,o);return
+                settings=get_settings();o=new_order(settings);o['uid']=uuid.uuid4().hex;self.reply(200,o);return
             if path=='/api/signing':self.reply(200,signing_status());return
             if path=='/api/signing/image':
                 kind=parse_qs(url.query).get('kind',[''])[0]
@@ -305,12 +325,12 @@ class Handler(BaseHTTPRequestHandler):
                 available={c for c in TEMPLATE_CODES if (TEMPLATES/(c+'.pdf')).is_file()}|stored
                 self.reply(200,{'available':sorted(available),'missing':[c for c in ['01','inspection','22','03','02','26','24','25','16','LV'] if c not in available]});return
             if path=='/api/forms':
-                _,settings=state()
+                settings=get_settings()
                 self.reply(200,{'forms':[{'code':c,'name':name,'visibility':visibility(settings,c),'defaultVisibility':DEFAULT_VISIBILITY[c],'config':form_config(settings,c)} for c,name in FORMS.items()]});return
             if path=='/api/forms/editor':
                 code=parse_qs(url.query).get('code',[''])[0]
                 if code not in FORMS:raise ValueError('نموذج غير معروف')
-                _,settings=state()
+                settings=get_settings()
                 with PDF_LOCK:metadata=describe_form(code,settings)
                 self.reply(200,dict(metadata,code=code,visibility=visibility(settings,code),defaultVisibility=DEFAULT_VISIBILITY[code],config=form_config(settings,code)));return
             if path=='/api/migration':
@@ -362,7 +382,7 @@ class Handler(BaseHTTPRequestHandler):
             if path=='/api/forms/preview':
                 code=body['code']
                 if code not in FORMS:raise ValueError('نموذج غير معروف')
-                _,settings=state();config=body.get('config',form_config(settings,code))
+                settings=get_settings();config=body.get('config',form_config(settings,code))
                 if body.get('order') is not None:validate(body['order'])
                 with PDF_LOCK:
                     metadata=describe_form(code)
@@ -374,27 +394,22 @@ class Handler(BaseHTTPRequestHandler):
                     raw=form_image(code,config,order,settings,signing_assets())
                 self.reply(200,raw,'image/png');return
             if path=='/api/migration':self.reply(200,restore_migration(body));return
-            if path=='/api/save':
-                if 'settings' in body:validate_settings(body['settings'])
-                put_orders(body.get('orders',[]))
-                if 'settings' in body:
-                    with db() as c:c.execute('INSERT INTO settings(id,data) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data',(json.dumps(body['settings'],ensure_ascii=False),))
-                self.reply(200,{'saved':True});return
+            if path=='/api/save':self.reply(200,save_changes(body));return
             if path=='/api/delete':
                 with db() as c:c.execute('DELETE FROM orders WHERE uid=?',(body['uid'],))
                 self.reply(200,{'deleted':True});return
             if path=='/api/import':
                 orders=import_table(body);put_orders(orders);self.reply(200,{'orders':orders});return
             if path=='/api/missing':
-                _,settings=state();self.reply(200,order_status(body['order'],settings));return
+                settings=get_settings();self.reply(200,order_status(body['order'],settings));return
             if path=='/api/missing-batch':
                 items=body.get('orders',[])
                 if not isinstance(items,list) or len(items)>500:raise ValueError('الحد 500 أمر في العملية الواحدة')
-                _,settings=state();self.reply(200,{'statuses':{o['uid']:order_status(o,settings) for o in items}});return
+                settings=get_settings();self.reply(200,{'statuses':{o['uid']:order_status(o,settings) for o in items}});return
             if path=='/api/export':self.reply(202,{'job':start_export(body['orders'],body.get('format','zip'))});return
             if path=='/api/preview':
                 o=body['order'];validate(o);form=body.get('form')
-                _,settings=state()
+                settings=get_settings()
                 if form and form not in selected_forms(o,settings):raise ValueError('هذا النموذج ليس ضمن أعمال الأمر')
                 with PDF_LOCK:raw=generate(o,form,settings,signing_assets())
                 self.reply(200,raw,'application/pdf');return

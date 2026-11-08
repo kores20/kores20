@@ -22,6 +22,40 @@ from PIL import Image, ImageDraw
 
 @unittest.skipUnless(os.getenv('TEST_DATABASE_URL'), 'Set TEST_DATABASE_URL for PostgreSQL integration')
 class PostgreSQLTests(unittest.TestCase):
+    def test_pool_reuses_connections_and_recovers_closed_backend(self):
+        import psycopg
+        from psycopg.conninfo import make_conninfo
+        from app import server, storage
+        from app.schema import new_order
+        schema='forms_pool_'+uuid.uuid4().hex
+        url=os.environ['TEST_DATABASE_URL']
+        scoped=make_conninfo(url,options='-csearch_path='+schema)
+        with psycopg.connect(url,autocommit=True) as admin:admin.execute('CREATE SCHEMA '+schema)
+        try:
+            with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ,{'DATABASE_URL':scoped}), patch.object(server,'DATA',Path(tmp)):
+                pids=[]
+                for i in range(3):
+                    server.save_changes({'orders':[dict(new_order(),uid='pooled',id='264000001',permit=str(i))]})
+                    with server.db() as c:pids.append(c.execute('SELECT pg_backend_pid()').fetchone()[0])
+                self.assertEqual(len(set(pids)),1)
+                self.assertEqual(storage._pools[scoped].get_stats()['connections_num'],1)
+                # An error rolls back before another request borrows the connection.
+                with self.assertRaises(psycopg.errors.UndefinedTable):
+                    with server.db() as c:c.execute('SELECT * FROM not_a_real_table')
+                self.assertEqual(server.state()[0][0]['permit'],'2')
+                # An update from another device is read fresh despite connection reuse.
+                with psycopg.connect(scoped) as external:
+                    external.execute('INSERT INTO settings(id,data) VALUES(1,%s)',(json.dumps({'city':'أبها'}),))
+                self.assertEqual(server.get_settings()['city'],'أبها')
+                # Simulate Neon closing an idle connection; checkout reconnects safely.
+                with psycopg.connect(url,autocommit=True) as admin:
+                    admin.execute('SELECT pg_terminate_backend(%s)',(pids[0],))
+                self.assertEqual(server.state()[0][0]['permit'],'2')
+                with server.db() as c:self.assertNotEqual(c.execute('SELECT pg_backend_pid()').fetchone()[0],pids[0])
+        finally:
+            storage.close_pools()
+            with psycopg.connect(url,autocommit=True) as admin:admin.execute('DROP SCHEMA '+schema+' CASCADE')
+
     def test_migration_survives_empty_cache_and_new_process(self):
         import psycopg
         from psycopg.conninfo import make_conninfo
