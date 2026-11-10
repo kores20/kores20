@@ -1,10 +1,12 @@
 """Checkbox anchors shared by PDF rendering and the visual form editor."""
 from .schema import QUESTIONS, LV_QUESTIONS
+from .checklists import CHECKLISTS, checklist_label
 
 
 def check_specs(code, src, order):
     result=[]
     def add(tag,n,y,yes=None,no=None,na=None,box=None,condition=None,label=None,default=None):
+        if label is None and tag in CHECKLISTS:label=checklist_label(tag,n-1)
         positions={k:[x,y] for k,x in [('نعم',yes),('لا',no),('لا ينطبق',na)] if x is not None}
         bounds=box
         if bounds is None:

@@ -38,6 +38,7 @@ def configured_forms(order, settings=None):
 
 def check_override(config, key, order):
     """None means use the current order; an empty string means explicitly blank."""
+    if key in order.get('checkOverrides',{}):return order['checkOverrides'][key]
     rule = config.get('checks', {}).get(key, {})
     mode = rule.get('mode', 'auto')
     if mode == 'blank':

@@ -1,6 +1,7 @@
 from copy import deepcopy
 from datetime import date
 from .form_settings import configured_forms, form_config, check_override, needs_field, custom_inputs
+from .checklists import checklist_label
 
 QUESTIONS = [
     'بطاقات التعميد والتأهيل متوفرة وسارية لجميع فئات العاملين بالموقع',
@@ -87,7 +88,7 @@ def new_order(settings=None):
     patterns=d.pop('assessmentPatterns',PATTERNS)
     d.update({'id':'','workCode':'801','consultantCode':'912','date':'','site':'','feeder':'',
       'description':'','permit':'','mainBreaker':'','voltage':'','operator':'','operatorId':'',
-      'mode':'bundle','works':['meter'],'meters':[],'customFields':{},'skipped':[], 'assessments':deepcopy(patterns),
+      'mode':'bundle','works':['meter'],'meters':[],'customFields':{},'skipped':[], 'assessments':deepcopy(patterns),'checkOverrides':{},
       'inspectionNotes':{'1':'عامل مشارك'},'excavationLength':'','mvSize':'','mvLength':'','lvSize':'','lvLength':'',
       'transformerKva':'','rmuCells':'','voltageKv':'','terminationNotes':'','equipmentNumber':''})
     return d
@@ -143,12 +144,12 @@ def missing(o, settings=None):
                 if ('joint' if tag.endswith('joint') else 'termination') in works:
                     for i in range(n):
                         if check_override(form_config(settings,code),f'{tag}.{i+1}',o) is None:
-                            add(f'assessments.{tag}.{i}',f'{FORMS[code]} — {"لحام" if tag.endswith("joint") else "نهايات"}: البند {i+1}','assessment','التقييمات')
+                            add(f'assessments.{tag}.{i}',f'{FORMS[code]} — {"لحام" if tag.endswith("joint") else "نهايات"}: {checklist_label(tag,i)}','assessment','التقييمات')
         else:
             for i in range(count):
                 if check_override(form_config(settings,code),f'{code}.{i+1}',o) is not None:continue
                 if code=='24' and i==3 and not any(m.get('ct') for m in o.get('meters',[])):continue
                 if code=='16' and (i==8 and not any(m.get('ct') for m in o.get('meters',[])) or i==5 and not o.get('temporaryMeter')):continue
-                label=QUESTIONS[i] if code=='inspection' else f'{FORMS[code]} — البند {i+1}'
+                label=QUESTIONS[i] if code=='inspection' else f'{FORMS[code]} — {checklist_label(code,i)}'
                 add(f'assessments.{code}.{i}',label,'assessment','التقييمات')
     return qs

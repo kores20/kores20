@@ -25,6 +25,7 @@ from .form_editor import validate_config
 from .signing import KINDS, inspect_asset, signing_config, validate_signing_config, signature_asset_kind, same_owner
 from .consultants import CONSULTANTS
 from . import workflow
+from .checklists import CHECKLISTS, CHECK_COUNTS
 
 ROOT=Path(__file__).parent
 DATA=Path(os.getenv('DATA_DIR',str(ROOT.parent/'.data')));DATA.mkdir(parents=True,exist_ok=True)
@@ -160,6 +161,12 @@ def validate(o):
         if str(value or '') not in ['','230','400']:raise ValueError('جهد المنخفض يجب أن يكون 230 أو 400 فولت')
     for vals in o.get('assessments',{}).values():
         if not isinstance(vals,list) or any(x not in ['',None,'نعم','لا','لا ينطبق'] for x in vals):raise ValueError('تقييم غير صالح')
+    overrides=o.get('checkOverrides',{})
+    if not isinstance(overrides,dict) or len(overrides)>250:raise ValueError('تعديلات بنود الفحص غير صالحة')
+    for key,value in overrides.items():
+        if not isinstance(key,str) or len(key)>80:raise ValueError('معرّف بند الفحص غير صالح')
+        tag,_,number=key.rpartition('.')
+        if tag not in CHECK_COUNTS or not number.isdigit() or str(int(number))!=number or not 1<=int(number)<=CHECK_COUNTS[tag] or value not in ['','نعم','لا','لا ينطبق']:raise ValueError('تعديل بند فحص غير صالح')
     validate_custom_values(o.get('customFields',{}))
     if not re.fullmatch(r'[a-zA-Z0-9-]{1,80}',o.get('uid','')):raise ValueError('معرّف المسودة غير صالح')
     return o
@@ -192,11 +199,12 @@ def validate_settings(settings):
     return settings
 
 def order_status(o,settings,progress=None,assets=None):
-    fixed={}
+    # Expose defaults separately; the editor applies this order's explicit choices.
+    fixed={};default_order=dict(o,checkOverrides={})
     for code in selected_forms(o,settings):
         config=form_config(settings,code)
         for key in config.get('checks',{}):
-            value=check_override(config,key,o)
+            value=check_override(config,key,default_order)
             if value is not None:fixed[key]=value
     questions=missing(o,settings)
     return {'questions':questions,'forms':selected_forms(o,settings),
@@ -359,7 +367,7 @@ class Handler(BaseHTTPRequestHandler):
                 with db() as c:progress=workflow.context(c)[0]
                 self.reply(200,{'orders':orders,'settings':settings,'progress':{o['uid']:progress[o['uid']] for o in orders if o['uid'] in progress}});return
             if path=='/api/schema':
-                self.reply(200,{'forms':FORMS,'works':WORKS,'questions':QUESTIONS,'lvQuestions':LV_QUESTIONS,'defaults':DEFAULTS,'patterns':PATTERNS,'consultants':CONSULTANTS});return
+                self.reply(200,{'forms':FORMS,'works':WORKS,'questions':QUESTIONS,'lvQuestions':LV_QUESTIONS,'defaults':DEFAULTS,'patterns':PATTERNS,'consultants':CONSULTANTS,'checklists':CHECKLISTS});return
             if path=='/api/new':
                 settings=get_settings();o=new_order(settings);o['uid']=uuid.uuid4().hex;self.reply(200,o);return
             if path=='/api/signing':self.reply(200,signing_status());return
