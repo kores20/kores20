@@ -69,6 +69,7 @@ def open_db(directory):
                 c.execute('CREATE TABLE IF NOT EXISTS templates (code TEXT PRIMARY KEY, pdf BYTEA NOT NULL)')
                 c.execute('CREATE TABLE IF NOT EXISTS signing_assets (kind TEXT PRIMARY KEY, data BYTEA NOT NULL, metadata TEXT NOT NULL)')
                 c.execute('CREATE TABLE IF NOT EXISTS order_progress (uid TEXT PRIMARY KEY, data TEXT NOT NULL)')
+                c.execute('CREATE TABLE IF NOT EXISTS renewal_jobs (id TEXT PRIMARY KEY, data TEXT NOT NULL, source BYTEA NOT NULL, updated_at TEXT NOT NULL)')
                 if not c.postgres and 'updated_at' not in [r[1] for r in c.execute('PRAGMA table_info(orders)')]:
                     c.execute("ALTER TABLE orders ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''")
                 c.connection.commit();_initialized.add(key)

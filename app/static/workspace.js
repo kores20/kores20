@@ -5,6 +5,7 @@ let missingPage=0;
 const missingPageSize=40;
 
 function showWorkspace(view){
+ $('#renewal-view').classList.add('hidden');$('#nav-renewal').classList.remove('active');
  $('#orders-view').classList.toggle('hidden',view!=='orders');
  $('#missing-view').classList.toggle('hidden',view!=='missing');
  $('#nav-orders').classList.toggle('active',view==='orders');

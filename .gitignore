@@ -1,6 +1,7 @@
 .data/
 .venv/
 __pycache__/
+app/assets/tessdata/*.traineddata
 *.pyc
 .env
 test-results/
