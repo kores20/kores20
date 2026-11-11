@@ -3,7 +3,7 @@ services:
     name: namothaj
     runtime: python
     plan: free
-    buildCommand: pip install -r requirements.txt && python -m app.ocr_setup
+    buildCommand: pip install -r requirements.txt
     startCommand: python -m app.server
     healthCheckPath: /health
     envVars:

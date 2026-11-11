@@ -25,7 +25,7 @@ function modal(id){const d=$('#'+id);if(!d.open)d.showModal()}
 async function refreshMissing(o){if(questionMap[o.uid])return questionMap[o.uid];const result=await api('/api/missing',{order:clone(o)});questionMap[o.uid]=result;return result}
 const pendingSaves=new Map(),saveTimers=new Map(),savedSnapshots=new Map();
 let saveFlight=null,saveFailed=false;
-function saveState(){const el=$('#save-state');if(saveFailed&&pendingSaves.size)el.textContent='لم يتم الحفظ — أعد المحاولة';else if(saveFlight)el.textContent='جارٍ الحفظ…';else if(pendingSaves.size)el.textContent='تغييرات غير محفوظة';else if(typeof missingDrafts!=='undefined'&&missingDrafts.size)el.textContent='خانات النواقص بانتظار الحفظ';else if(typeof rn!=='undefined'&&rn.saving)el.textContent='جارٍ حفظ تجديد النماذج…';else if(typeof rn!=='undefined'&&rn.dirty)el.textContent='تعديلات التجديد بانتظار الحفظ';else el.innerHTML='<span class="live-dot"></span> البيانات محفوظة'}
+function saveState(){const el=$('#save-state');if(saveFailed&&pendingSaves.size)el.textContent='لم يتم الحفظ — أعد المحاولة';else if(saveFlight)el.textContent='جارٍ الحفظ…';else if(pendingSaves.size)el.textContent='تغييرات غير محفوظة';else if(typeof missingDrafts!=='undefined'&&missingDrafts.size)el.textContent='خانات النواقص بانتظار الحفظ';else el.innerHTML='<span class="live-dot"></span> البيانات محفوظة'}
 function queueSave(o,delay=0){clearTimeout(saveTimers.get(o.uid));saveTimers.delete(o.uid);pendingSaves.set(o.uid,clone(o));saveFailed=false;if(delay)saveTimers.set(o.uid,setTimeout(()=>{saveTimers.delete(o.uid);drainSaves().catch(e=>toast(e.message))},delay));saveState()}
 function drainSaves(){
  if(saveFlight)return saveFlight;

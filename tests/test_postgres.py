@@ -9,10 +9,8 @@ import json
 import os
 from pathlib import Path
 import subprocess
-import shutil
 import sys
 import tempfile
-import time
 import unittest
 import uuid
 import zipfile
@@ -61,7 +59,7 @@ class PostgreSQLTests(unittest.TestCase):
     def test_migration_survives_empty_cache_and_new_process(self):
         import psycopg
         from psycopg.conninfo import make_conninfo
-        from app import server, pdf_engine, renewal
+        from app import server, pdf_engine
         from app.schema import new_order
 
         schema = 'forms_test_' + uuid.uuid4().hex
@@ -84,8 +82,7 @@ class PostgreSQLTests(unittest.TestCase):
                     z.writestr('templates/01.pdf', pdf)
                     z.writestr('orders-backup.json', json.dumps({'orders': [order], 'settings': {'city': 'أبها'}}))
                 with patch.dict(os.environ, env), patch.object(server, 'DATA', Path(tmp)), \
-                        patch.object(server, 'TEMPLATES', templates), patch.object(pdf_engine, 'TEMPLATES', templates), \
-                        patch.object(renewal,'ROOT',Path(tmp)/'renewal-cache'),patch.object(renewal,'JOBS',{}):
+                        patch.object(server, 'TEMPLATES', templates), patch.object(pdf_engine, 'TEMPLATES', templates):
                     server.restore_migration({'base64': base64.b64encode(archive.getvalue()).decode()})
                     order['permit'] = '1216'
                     server.put_orders([order])
@@ -99,33 +96,20 @@ class PostgreSQLTests(unittest.TestCase):
                     assets=server.signing_assets()
                     with server.db() as c:workflow.record_exports(c,[order],server.get_settings(c),assets,workflow.now())
                     server.set_delivery(order['uid'],'delivered')
-                    old=fitz.open();old_page=old.new_page(width=612,height=792)
-                    old_page.insert_text((40,50),'FORM-SEC-01');old_page.insert_text((90,248),'264000001',color=(.09,.21,.36))
-                    source=old.tobytes();old.close()
-                    renewal_id=renewal.start(source,'264000001-old.pdf',server.get_settings(),server.PDF_LOCK)
-                    deadline=time.monotonic()+15
-                    while renewal.get(renewal_id)['state']=='working' and time.monotonic()<deadline:time.sleep(.05)
-                    self.assertEqual(renewal.get(renewal_id)['state'],'ready')
-                    renewal.save_page(renewal_id,0,{'confirmed':True})
-                    shutil.rmtree(renewal.get(renewal_id)['directory']);renewal.JOBS.clear()
                     (templates / '01.pdf').unlink()
                     # Simulate a new Render process with an empty filesystem cache.
                     code = """
 import hashlib, json
-from app import server, pdf_engine, renewal
+from app import server, pdf_engine
 orders, settings = server.state()
 p = pdf_engine.template_path('01')
-job=renewal.get(__import__('sys').argv[1])
-renewal.source_image(job,job['pages'][0])
-print(json.dumps({'permit': orders[0]['permit'], 'city': settings['city'], 'forms': settings['formConfigs'], 'sha': hashlib.sha256(p.read_bytes()).hexdigest(), 'stamp': hashlib.sha256(server.signing_assets()['stamp']['raw']).hexdigest(), 'stage': server.status_batch(orders,settings)[orders[0]['uid']]['workflow']['stage'], 'renewalReviewed':job['pages'][0]['confirmed'],'renewalSource':hashlib.sha256((job['directory']/'source.pdf').read_bytes()).hexdigest()}))
+print(json.dumps({'permit': orders[0]['permit'], 'city': settings['city'], 'forms': settings['formConfigs'], 'sha': hashlib.sha256(p.read_bytes()).hexdigest(), 'stamp': hashlib.sha256(server.signing_assets()['stamp']['raw']).hexdigest(), 'stage': server.status_batch(orders,settings)[orders[0]['uid']]['workflow']['stage']}))
 """
-                    child = subprocess.run([sys.executable, '-c', code, renewal_id], env=dict(os.environ),
+                    child = subprocess.run([sys.executable, '-c', code], env=dict(os.environ),
                                            capture_output=True, text=True, check=True)
                     self.assertEqual(json.loads(child.stdout), {'permit': '1216', 'city': 'أبها',
                                                               'forms': {'01': {'visibility': {'mode': 'never'}}},
                                                               'stage':'delivered',
-                                                              'renewalReviewed':True,
-                                                              'renewalSource':hashlib.sha256(source).hexdigest(),
                                                               'stamp': hashlib.sha256(stamp).hexdigest(),
                                                               'sha': hashlib.sha256(pdf).hexdigest()})
                     with zipfile.ZipFile(io.BytesIO(server.migration_archive())) as z:

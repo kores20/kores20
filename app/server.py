@@ -25,7 +25,6 @@ from .form_editor import validate_config
 from .signing import KINDS, inspect_asset, signing_config, validate_signing_config, signature_asset_kind, same_owner
 from .consultants import CONSULTANTS
 from . import workflow
-from . import renewal
 from .checklists import CHECKLISTS, CHECK_COUNTS
 
 ROOT=Path(__file__).parent
@@ -106,9 +105,6 @@ def restore_migration(body):
 
 def db():
     return open_db(DATA)
-
-renewal.DB=db
-renewal.PDF_LOCK=PDF_LOCK
 
 def signing_assets():
     with db() as c:rows=c.execute('SELECT kind,data,metadata FROM signing_assets').fetchall()
@@ -364,21 +360,6 @@ class Handler(BaseHTTPRequestHandler):
         if not self.authorized():return
         url=urlparse(self.path);path=unquote(url.path)
         try:
-            if path=='/api/renewal/options':
-                self.reply(200,{'forms':renewal.OPTIONS,'legacyForms':list(renewal.LEGACY),'maxBytes':renewal.MAX_BYTES,'maxPages':renewal.MAX_PAGES});return
-            if path.startswith('/api/renewal/'):
-                parts=path.split('/');key=parts[3];job=renewal.get(key);action=parts[4] if len(parts)>4 else 'status'
-                if action=='status':self.reply(200,renewal.public(job));return
-                if action=='original':self.reply(200,(job['directory']/'source.pdf').read_bytes(),'application/pdf');return
-                index=int(parse_qs(url.query).get('page',['0'])[0]);entry=renewal.page_at(job,index)
-                if action=='page':self.reply(200,entry);return
-                if action=='source':self.reply(200,renewal.source_image(job,entry).read_bytes(),'image/png');return
-                if action=='preview':self.reply(200,renewal.preview(key,index),'image/png');return
-                if action=='download':
-                    if job['exportState']!='done':raise ValueError('الملف الجديد غير جاهز بعد')
-                    filename='renewed-'+(job['orderId'] if re.fullmatch(r'\d{9}',job['orderId']) else 'forms')+'.pdf'
-                    self.reply(200,(job['directory']/'renewed.pdf').read_bytes(),'application/pdf',{'Content-Disposition':f'attachment; filename="{filename}"'});return
-                raise ValueError('طلب تجديد غير معروف')
             if path=='/api/state':
                 orders,settings=state();self.reply(200,{'orders':orders,'settings':settings,'statuses':status_batch(orders,settings)});return
             if path=='/api/backup':
@@ -442,13 +423,6 @@ class Handler(BaseHTTPRequestHandler):
             length=int(self.headers.get('Content-Length',0))
             if length>42_000_000:self.reply(413,{'error':'الحد الأقصى للطلب 42 ميغابايت'});return
             body=json.loads(self.rfile.read(length) or '{}');path=urlparse(self.path).path
-            if path=='/api/renewal/upload':
-                key=renewal.start(base64.b64decode(body['base64'],validate=True),body.get('filename','old-forms.pdf'),get_settings(),PDF_LOCK)
-                self.reply(202,{'id':key});return
-            if path=='/api/renewal/save':self.reply(200,renewal.save_page(body['id'],body['page'],body['changes']));return
-            if path=='/api/renewal/model':self.reply(200,renewal.select_model(body['id'],body['page'],body['code'],body.get('rotation',0),body.get('layout')));return
-            if path=='/api/renewal/export':renewal.start_export(body['id']);self.reply(202,{'started':True});return
-            if path=='/api/renewal/delete':renewal.delete(body['id']);self.reply(200,{'deleted':True});return
             if path=='/api/signing/upload':
                 with PDF_LOCK:store_signing_asset(body['kind'],base64.b64decode(body['base64'],validate=True))
                 self.reply(200,signing_status());return
@@ -506,14 +480,6 @@ def main():
     host=os.getenv('HOST','127.0.0.1');port=int(os.getenv('PORT','8080'))
     if os.getenv('RENDER') and not os.getenv('APP_PASSWORD'):raise RuntimeError('Set APP_PASSWORD before publishing this website.')
     if os.getenv('RENDER') and not os.getenv('DATABASE_URL'):raise RuntimeError('Set DATABASE_URL for durable data before publishing on Render Free.')
-    # Existing Render services may still use their previous build command.
-    # Prepare the same pinned public models without delaying the site's startup.
-    def prepare_ocr():
-        try:
-            from .ocr_setup import install
-            install()
-        except Exception:print('OCR models unavailable; manual PDF matching remains available.',flush=True)
-    threading.Thread(target=prepare_ocr,daemon=True).start()
     print(f'Forms app: http://{host}:{port}',flush=True)
     ThreadingHTTPServer((host,port),Handler).serve_forever()
 
