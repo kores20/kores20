@@ -21,7 +21,7 @@ LABELS = {
     'operatorId':'الرقم الوظيفي', 'meterCount':'عدد العدادات', 'mainBreaker':'القاطع الرئيسي',
     'foundationLabel':'نوع القاعدة وسعتها', 'excavationSummary':'ملخص الحفر والكابلات',
     'equipmentNumber':'رقم المعدة', 'terminationNotes':'تفاصيل النهايات',
-    'kind':'نوع الطلب', 'subscription':'رقم الاشتراك', 'place':'نوع المكان', 'previous':'السعة السابقة',
+    'kind':'نوع الطلب', 'subscription':'رقم الاشتراك', 'place':'نوع المكان', 'previous':'سعة القاطع السابقة',
     'breaker':'قاطع العداد', 'serial':'رقم العداد', 'rating':'سعة العداد', 'digits':'عدد الخانات',
     'reading':'قراءة التركيب', 'removedReading':'قراءة الخلع', 'voltage':'الجهد', 'ctRatio':'نسبة المحولات',
     'multiplier':'معامل الضرب', 'maker':'الصانع', 'factory':'رقم المصنع', 'year':'سنة الصنع',

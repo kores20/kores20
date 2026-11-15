@@ -116,7 +116,8 @@ def missing(o, settings=None):
         for k,l,t in [('mainBreaker','سعة القاطع الرئيسي بالأمبير','text'),('operator','اسم مدخل البيانات','text'),('operatorId','الرقم الوظيفي لمدخل البيانات','text')]:add(k,l,t,'العدادات')
         if not o.get('meters'):add('meters','أضف بيانات العدادات','meters','العدادات')
         for i,m in enumerate(o.get('meters',[])):
-            for k,l in [('serial','رقم العداد'),('breaker','قاطع العداد بالأمبير'),('subscription','رقم الاشتراك')]:add(f'meters.{i}.{k}',f'العداد {i+1}: {l}','text','العدادات')
+            for k,l in [('serial','رقم العداد'),('breaker','سعة القاطع الجديدة بالأمبير' if m.get('kind')=='تقوية' else 'قاطع العداد بالأمبير'),('subscription','رقم الاشتراك')]:add(f'meters.{i}.{k}',f'العداد {i+1}: {l}','text','العدادات')
+            if m.get('kind')=='تقوية' and '25' in forms:add(f'meters.{i}.previous',f'العداد {i+1}: سعة القاطع السابقة بالأمبير','text','العدادات')
             import re
             if m.get('serial') and not re.match(r'[A-Za-z]+\d{2}',str(m['serial'])):add(f'meters.{i}.year',f'العداد {i+1}: سنة الصنع','text','العدادات')
             if m.get('ct'):
