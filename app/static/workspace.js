@@ -5,11 +5,15 @@ let missingPage=0;
 const missingPageSize=40;
 
 function showWorkspace(view){
- $('#orders-view').classList.toggle('hidden',view!=='orders');
+ const tableView=view==='orders'||view==='archive';archiveView=view==='archive';selected.clear();
+ $('#orders-view').classList.toggle('hidden',!tableView);
+ $('#nav-archive').classList.toggle('active',archiveView);
+ $('#orders-heading').textContent=archiveView?'الأرشيف — الأوامر المنتهية':'أوامرك، في مكان واحد.';
+ if(tableView){filter='all';$('#search').value='';$('#stage-filter').value='all';$$('#filters button').forEach(b=>b.classList.toggle('selected',b.dataset.filter==='all'));renderTable();}
  $('#missing-view').classList.toggle('hidden',view!=='missing');
  $('#nav-orders').classList.toggle('active',view==='orders');
  $('#nav-missing').classList.toggle('active',view==='missing');
- $('#page-title').textContent=view==='missing'?'جميع النواقص':'أوامر العمل';
+ $('#page-title').textContent=view==='missing'?'جميع النواقص':archiveView?'الأرشيف':'أوامر العمل';
  if(view==='missing')renderMissing();
 }
 function workflowTime(value){if(!value)return '';try{return new Intl.DateTimeFormat('ar-SA',{dateStyle:'short',timeStyle:'short',calendar:'gregory',timeZone:'Asia/Riyadh'}).format(new Date(value))}catch(e){return ''}}
@@ -28,7 +32,7 @@ async function changeDelivery(uid,stage){
  try{const o=orders.find(o=>o.uid===uid);await persist(o);const snapshot=JSON.stringify(o),result=await api('/api/progress',{uid,stage});if(JSON.stringify(o)===snapshot)questionMap[uid]=result;toast(stage==='delivered'?'سجلنا تسليم الأمر':'ألغينا علامة التسليم')}
  finally{deliveryBusy.delete(uid);renderTable();updateWorkflowDetail()}
 }
-function missingRows(){return orders.flatMap(o=>(questionMap[o.uid]?.questions||[]).map(q=>({o,q,id:o.uid+':'+q.key})))}
+function missingRows(){return orders.filter(o=>!o.archived).flatMap(o=>(questionMap[o.uid]?.questions||[]).map(q=>({o,q,id:o.uid+':'+q.key})))}
 function renderWorkspace(){
  const rows=missingRows();$('#side-missing-count').textContent=rows.length;
  const remaining=new Set(rows.map(row=>row.id));for(const id of missingDrafts.keys())if(!remaining.has(id))missingDrafts.delete(id);
@@ -77,6 +81,7 @@ async function saveMissingRow(id,skip=false){
 document.addEventListener('click',async event=>{
  const b=event.target.closest('button');if(!b)return;
  try{
+  if(b.id==='nav-archive'){showWorkspace('archive');return}
   if(b.id==='nav-missing'){showWorkspace('missing');return}
   if(b.id==='missing-back'){showWorkspace('orders');return}
   if(b.id==='missing-prev'||b.id==='missing-next'){missingPage+=b.id==='missing-next'?1:-1;renderMissing();return}

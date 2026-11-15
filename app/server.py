@@ -152,6 +152,7 @@ def get_settings(connection=None):
 
 def validate(o):
     if not isinstance(o,dict):raise ValueError('بيانات الأمر غير صالحة')
+    if 'archived' in o and not isinstance(o['archived'],bool):raise ValueError('حالة الأرشفة غير صالحة')
     if o.get('id') and not re.fullmatch(r'\d{9}',str(o['id'])):raise ValueError('رقم أمر العمل يجب أن يتكون من 9 أرقام')
     for k in ['date']:
         if o.get(k):date.fromisoformat(o[k])

@@ -22,7 +22,8 @@ def fingerprint(order,settings,assets):
         kind=signature_asset_kind(order.get('inspector',''),assets,settings)
         if kind:kinds.append(kind)
     versions={kind:(assets.get(kind) or {}).get('metadata',assets.get(kind) or {}).get('version') for kind in kinds}
-    payload={'order':order,'forms':forms,'configs':{c:form_config(settings,c) for c in forms},
+    rendered_order={key:value for key,value in order.items() if key!='archived'}
+    payload={'order':rendered_order,'forms':forms,'configs':{c:form_config(settings,c) for c in forms},
              'signing':signing,'assets':versions}
     return hashlib.sha256(json.dumps(payload,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()).hexdigest()
 
