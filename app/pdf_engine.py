@@ -92,6 +92,7 @@ def date_text(value):
 
 def data_values(o):
     v=dict(o)
+    v.setdefault('handoverNotes','لا يوجد')
     v.update(dateText=date_text(o.get('date')),
       location=' — '.join(filter(None,[o.get('city',''),o.get('site','')])),department=' — '.join(filter(None,[o.get('region',''),o.get('division','')])),
       contractorLabel='المقاول: '+o.get('contractor',''),reportNumber='1',timeText=o.get('time','08:00')+' AM',note1=o.get('inspectionNotes',{}).get('1',''))

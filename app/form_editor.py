@@ -13,7 +13,7 @@ LABELS = {
     'representative':'اسم ممثل المقاول', 'inspector':'اسم المفتش / ممثل الاستشاري',
     'representativeSignature':'اسم ممثل المقاول في خانة التوقيع',
     'operatorSignature':'اسم مدخل البيانات في خانة التوقيع',
-    'consultantShort':'اسم الاستشاري المختصر', 'handoverNotes':'ملاحظات التسليم',
+    'consultantShort':'اسم الاستشاري المختصر', 'handoverNotes':'العوائق التي تعيق التنفيذ',
     'department':'المنطقة والدائرة', 'contractorLabel':'المقاول', 'description':'وصف العمل',
     'note1':'ملاحظة البند الأول', 'reportNumber':'رقم التقرير', 'safetyArea':'منطقة تقرير السلامة',
     'safetyRecipient':'الجهة المرسل لها التقرير', 'attendance':'فترة التواجد', 'workCode':'رمز العمل',
